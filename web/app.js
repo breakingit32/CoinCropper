@@ -518,16 +518,19 @@ function renderSheet() {
   $("verifyLink").hidden = !res.verify_url;
   if (res.verify_url) $("verifyLink").href = res.verify_url;
   renderGrading(res.grading);
-  renderGreysheet(res.greysheet);
+  renderGreysheet(res.greysheet, res.greysheet_status);
   const notes = [...(c.notes || []), coin.code ? `Barcode: ${coin.code}` : "Read from label text"];
   if (b.source === "mock") notes.unshift(NATIVE ? "Demo prices — add your CCE account in Settings for live bids."
     : "Demo prices — connect your CCE account on the server for live bids.");
   $("dNotes").textContent = notes.join(" · ");
 }
 
-function renderGreysheet(g) {
-  $("greyBox").hidden = !g;
-  if (!g) return;
+function renderGreysheet(g, status) {
+  // Always shown once a lookup has run, so it's clear why there's no price.
+  $("greyBox").hidden = !g && !status;
+  $("gsStatus").hidden = !status || status === "ok";
+  $("gsStatus").textContent = status && status !== "ok" ? status : "";
+  if (!g) { for (const id of ["gsGrey", "gsGreyCac", "gsCpg"]) $(id).textContent = "—"; $("gsMeta").textContent = ""; return; }
   $("gsGrey").textContent = money(g.grey);
   $("gsGreyCac").textContent = money(g.grey_cac);
   $("gsCpg").textContent = money(g.cpg);

@@ -218,10 +218,16 @@ export function makeDeviceBackend(getSettings) {
           catch (e) { bids = summarise("cce", [], null, e.message || String(e)); }
         }
       }
-      let grey = null;
-      try { grey = await greysheet.price({ pcgs_no: coin.pcgs_no, grade_num: coin.grade_num, cac: g?.cac }); }
-      catch (e) { coin.notes.push(e.message); }
-      return { coin, bids, grading: g, greysheet: grey, verify_url: verifyUrl(coin), cce_url: bids.url || CCE_BASE };
+      let grey = null, greyStatus;
+      if (!greysheet.configured()) greyStatus = "Add your Greysheet API key and token in Settings (⚙ → Grading APIs).";
+      else if (!coin.pcgs_no || !coin.grade_num) greyStatus = `Needs the coin's ${!coin.pcgs_no ? "PCGS #" : "grade"} to look it up.`;
+      else {
+        try {
+          grey = await greysheet.price({ pcgs_no: coin.pcgs_no, grade_num: coin.grade_num, cac: g?.cac });
+          greyStatus = !grey ? `Greysheet has no listing for PCGS #${coin.pcgs_no}.` : grey.none ? `Greysheet has no price for grade ${coin.grade_num}.` : "ok";
+        } catch (e) { greyStatus = e.message; }
+      }
+      return { coin, bids, grading: g, greysheet: grey, greysheet_status: greyStatus, verify_url: verifyUrl(coin), cce_url: bids.url || CCE_BASE };
     },
   };
 }

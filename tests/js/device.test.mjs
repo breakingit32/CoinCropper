@@ -67,6 +67,11 @@ await page.addInitScript(() => {
       }
       log.push({ plugin, method: o.method, url: o.url, data: o.data, dataType: o.dataType });
       const u = new URL(o.url);
+      if (u.host.includes("greysheet.com")) {
+        if (o.headers["x-api-key"] !== "GSK") return { status: 403, data: { ResponseStatus: { Message: "Unauthorized" } }, headers: {} };
+        return { status: 200, headers: {}, data: { PermitAccess: true, Data: [{ GsId: 9, Name: "1900-O/CC $1", PricingData: [
+          { Grade: +u.searchParams.get("Grade"), GradeLabel: "MS" + u.searchParams.get("Grade"), IsCac: false, GreyVal: "1,450.00", CpgVal: "1,850.00" }] }] } };
+      }
       if (u.pathname === "/Account/Login" && o.method === "GET") return { status: 200, data: LOGIN, headers: {} };
       if (u.pathname === "/Account/Login") {
         const f = Object.fromEntries((o.data || []).map((e) => [e.key, e.value]));
@@ -131,6 +136,19 @@ check(r.bids.quotes.length === 8 && r.bids.quotes[0].service === "PCGS" && r.bid
   "all MS64 quotes kept, PCGS first, sight-seen marked");
 check(r.bids.url.includes("/mkt/viewmarket?coinno=07268"), `coin opened by padded PCGS # (${r.bids.url})`);
 check(r.bids.market_title === "1PE 07268 1900-O/CC $1", "market title read");
+check(/Add your Greysheet API key/.test(r.greysheet_status || ""), "no Greysheet key: says so instead of hiding it");
+await page.evaluate(() => { localStorage.setItem("gsKey", "GSK"); localStorage.setItem("gsToken", "GST"); });
+r = await page.evaluate(() => window.__coincropper.lookup("02401136").then(() => window.__coincropper.coins.get("02401136").result));
+check(r.greysheet?.grey === 1450 && r.greysheet_status === "ok", `with a key: Greysheet ${r.greysheet?.grey}`);
+await page.evaluate(() => window.__coincropper.tracks.set("02401136", { key: "02401136", el: null, slab: { cx: 200, cy: 400, w: 150, h: 210, angle: 0 }, lastSeen: performance.now() + 60000 }));
+await page.waitForFunction(() => window.__coincropper.tracks.get("02401136")?.el?.textContent.includes("Grey"));
+const cardText = await page.evaluate(() => window.__coincropper.tracks.get("02401136").el.textContent);
+check(/Bid \$555.*Grey \$1,450/.test(cardText), `card shows bid and Greysheet (${cardText.trim()})`);
+await page.evaluate(() => { window.__coincropper.tracks.get("02401136").el.click(); });
+await page.waitForFunction(() => !document.getElementById("sheet").hidden);
+check(await page.textContent("#gsGrey") === "$1,450" && await page.isHidden("#gsStatus"), "detail sheet shows the Greysheet price");
+await page.evaluate(() => { document.querySelector("[data-close=sheet]").click(); });
+await page.evaluate(() => { localStorage.removeItem("gsKey"); localStorage.removeItem("gsToken"); window.__coincropper.tracks.get("02401136")?.el?.remove(); window.__coincropper.tracks.delete("02401136"); });
 r = await page.evaluate(() => window.__coincropper.lookup("X68", { service: "PCGS", pcgs_no: "7268", grade: "MS68", cert: "11111111" })
   .then(() => window.__coincropper.coins.get("X68").result));
 check(r.bids.high_bid === 9000 && r.bids.url.includes("range=high"), "grade outside the first tab: follows the High 60-70 tab");

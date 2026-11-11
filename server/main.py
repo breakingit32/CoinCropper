@@ -123,16 +123,26 @@ def verify_url(coin: SlabInfo) -> Optional[str]:
 async def lookup(req: LookupRequest) -> dict:
     coin, g = await identify(req)
     bids = await get_bids(coin)
-    grey = None
-    try:
-        grey = await state["greysheet"].price(coin.pcgs_no, coin.grade_num, (g or {}).get("cac"))
-    except (RuntimeError, httpx.HTTPError) as e:
-        coin.notes.append(str(e))
+    grey, grey_status = None, "ok"
+    if not (settings.greysheet_api_key and settings.greysheet_api_token):
+        grey_status = "Greysheet API key/token not set on the server (GREYSHEET_API_KEY, GREYSHEET_API_TOKEN)."
+    elif not (coin.pcgs_no and coin.grade_num):
+        grey_status = f"Needs the coin's {'PCGS #' if not coin.pcgs_no else 'grade'} to look it up."
+    else:
+        try:
+            grey = await state["greysheet"].price(coin.pcgs_no, coin.grade_num, (g or {}).get("cac"))
+            if not grey:
+                grey_status = f"Greysheet has no listing for PCGS #{coin.pcgs_no}."
+            elif grey.get("none"):
+                grey_status = f"Greysheet has no price for grade {coin.grade_num}."
+        except (RuntimeError, httpx.HTTPError) as e:
+            grey_status = str(e)
     return {
         "coin": coin.to_dict(),
         "bids": bids.to_dict(),
         "grading": g,
         "greysheet": grey,
+        "greysheet_status": grey_status,
         "verify_url": verify_url(coin),
         "cce_url": bids.url or settings.cce_base_url,
     }
