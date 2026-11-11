@@ -44,19 +44,26 @@ your service → **Environment** (`CCE_MODE=live`, `CCE_USER_ID`,
 [Connecting to CCE](#connecting-to-cce). Render's free plan sleeps when idle,
 so the first scan after a break can take ~30 seconds.
 
-### Android app (APK)
+### Android app (APK): no server needed
 
-There's also a real Android app in `mobile/` (Capacitor). It bundles the
-phone UI and talks to your server over the internet.
+There's also a real Android app in `mobile/` (Capacitor). **It runs entirely on
+the phone:** it signs in to CCE itself with your member login, keeps the
+session like a browser would, and reads the bids directly. No Render or
+other server required. (The website and iPhone versions still use the server,
+because browsers won't let one site read another site's pages.)
 
 * **Get the APK:** GitHub → **Actions** → **Android APK** → latest run →
-  download **CoinCropper-apk**. Or build it yourself with Android Studio /
-  the Android SDK: `cd mobile && npm ci && npm run apk`
+  download **CoinCropper-apk**. Or build it yourself with the Android SDK:
+  `cd mobile && npm ci && npm run apk`
   (output: `mobile/android/app/build/outputs/apk/debug/app-debug.apk`).
-* **Install:** open the APK on the phone and allow *Install unknown apps* for
-  your browser/Files app when Android asks.
-* **First launch:** under **Server**, enter your server's address (e.g.
-  `https://coincropper.onrender.com`), tap **Save**, then **Start camera**.
+* **Install:** open the APK on the phone and allow *Install unknown apps* when
+  Android asks.
+* **Set up:** tap ⚙ → enter your CCE **user id**, **password** and **bid page
+  address** (see [Connecting to CCE](#connecting-to-cce); you can paste the
+  full `https://www.certifiedcoinexchange.com/…` address) → **Test CCE login**
+  → **Save**. Optionally add a PCGS API token.
+* Until CCE is set up it shows demo prices. Your login is stored only on the
+  phone. Under **Advanced** you can still point the app at a server instead.
 
 It's a debug-signed build for installing yourself; publishing to Google Play
 would need a release signing key.
@@ -138,11 +145,14 @@ label (OCR) plus anything you type in **Fix coin details**.
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
-pytest
+pytest                          # server
+node tests/js/device.test.mjs   # app's on-device mode (needs Playwright)
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)
 * `server/pcgs.py`: PCGS cert lookup
 * `server/cce.py`: CCE login, bid-table parser, demo data
 * `server/main.py`: FastAPI app, serves `web/` and `/api/*`
-* `web/`: the phone app (plain HTML/JS, no build step)
+* `web/`: the phone app (plain HTML/JS, no build step); `web/core.js` and
+  `web/device.js` are the on-device copies of the server logic used by the APK
+* `mobile/`: Android (Capacitor) project that bundles `web/` into an APK

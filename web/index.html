@@ -19,7 +19,10 @@
 
     <header id="topbar">
       <div class="brand">CoinCropper</div>
-      <div id="mode" class="pill">…</div>
+      <div class="top-right">
+        <div id="mode" class="pill">…</div>
+        <button id="settingsBtn" class="icon-btn" aria-label="Settings" hidden>⚙</button>
+      </div>
     </header>
 
     <div id="start" class="center-card">
@@ -28,14 +31,8 @@
          gets a floating card with its current CCE bid.</p>
       <button id="startBtn" class="primary">Start camera</button>
       <p id="startErr" class="err" hidden></p>
-      <details id="serverBox" hidden>
-        <summary>Server</summary>
-        <div class="row server-row">
-          <input id="serverUrl" type="url" inputmode="url" autocapitalize="off" autocomplete="off"
-                 placeholder="https://coincropper.onrender.com">
-          <button id="saveServer">Save</button>
-        </div>
-      </details>
+      <p id="startHint" class="muted" hidden>Showing demo prices until you connect your CCE account.</p>
+      <button id="startSettings" class="link-btn" hidden>Settings</button>
     </div>
 
     <footer id="controls" hidden>
@@ -103,6 +100,44 @@
       <button id="exportBtn">Copy as CSV</button>
       <button id="clearBtn">Clear</button>
     </div>
+  </section>
+
+  <!-- Settings (Android app) -->
+  <section id="settingsSheet" class="sheet" hidden>
+    <div class="sheet-grip"></div>
+    <div class="sheet-head">
+      <div><div class="d-title">Settings</div>
+        <div class="d-sub">Saved only on this phone.</div></div>
+      <button class="close" data-close="settingsSheet" aria-label="Close">✕</button>
+    </div>
+    <form id="settingsForm" class="settings">
+      <h3>CCE account</h3>
+      <p class="muted">The app signs in to CCE itself and keeps you signed in, like a browser would.</p>
+      <label>User id <input name="cceUser" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <label>Password <input name="ccePass" type="password" autocomplete="current-password"></label>
+      <label>Bid page address
+        <input name="cceSearchUrl" autocapitalize="off" autocorrect="off" spellcheck="false"
+               placeholder="/…?pcgs={pcgs_no}&amp;grade={grade_num}">
+        <small>The CCE page that lists bids for one coin, with the coin's details replaced by
+          {pcgs_no}, {grade_num}, {grade}, {service}, {cert} or {query}.</small>
+      </label>
+      <h3>PCGS (optional)</h3>
+      <label>PCGS API token
+        <input name="pcgsToken" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <small>Turns a PCGS cert number into the coin and grade. Free at pcgs.com/publicapi.</small>
+      </label>
+      <details>
+        <summary>Advanced</summary>
+        <label>Server address
+          <input name="serverUrl" type="url" inputmode="url" autocapitalize="off" placeholder="leave blank to run on this phone">
+        </label>
+      </details>
+      <div class="row">
+        <button type="button" id="testLogin">Test CCE login</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+      <p id="settingsStatus" class="muted" aria-live="polite"></p>
+    </form>
   </section>
 
   <canvas id="work" hidden></canvas>

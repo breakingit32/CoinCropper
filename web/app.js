@@ -1,5 +1,7 @@
 // CoinCropper — point the phone at slabbed coins, get CCE bids floating over each one.
 
+import { makeDeviceBackend } from "./device.js";
+
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
 const FORMATS = ["code_128", "qr_code", "code_39", "data_matrix", "pdf417", "itf", "ean_13"];
@@ -18,16 +20,34 @@ let paused = false;
 let stream = null;
 let openCode = null;
 
-// Inside the Android app (Capacitor) the page is bundled, so API calls go to the
-// server address the user saved; on the website they go to the same origin.
+// Website: lookups go to the CoinCropper server that served the page.
+// Android app: lookups run on the phone (device.js signs in to CCE directly),
+// unless a server address is set in Settings.
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
+const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsToken", "serverUrl"];
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
 }
+const settings = () => Object.fromEntries(SETTING_KEYS.map((k) => [k, store(k) || ""]));
 function serverUrl() { return store("serverUrl") || ""; }
+const onDevice = () => NATIVE && !serverUrl();
+const device = makeDeviceBackend(settings);
 function api(path) {
   const base = serverUrl();
   return base ? `${base}/api/${path}` : `api/${path}`;
+}
+async function backendLookup(req) {
+  if (onDevice()) return device.lookup(req);
+  const r = await fetch(api("lookup"), {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req),
+  });
+  if (!r.ok) throw new Error(`server ${r.status}`);
+  return r.json();
+}
+async function backendStatus() {
+  if (onDevice()) return device.status();
+  const r = await fetch(api("status"));
+  return r.json();
 }
 
 // ---------------------------------------------------------------- utilities
@@ -180,12 +200,7 @@ async function lookup(code, extra = {}) {
   coin.error = null;
   renderTags(); if (openCode === code) renderSheet();
   try {
-    const r = await fetch(api("lookup"), {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, ...coin.overrides }),
-    });
-    if (!r.ok) throw new Error(`server ${r.status}`);
-    coin.result = await r.json();
+    coin.result = await backendLookup({ code, ...coin.overrides });
     coin.status = coin.result.bids.error ? "error" : "ok";
     coin.error = coin.result.bids.error;
   } catch (e) {
@@ -362,12 +377,6 @@ async function ocrLabel() {
 
 async function start() {
   $("startErr").hidden = true;
-  if (NATIVE && !serverUrl()) {
-    $("serverBox").open = true;
-    $("startErr").hidden = false;
-    $("startErr").textContent = "Enter your CoinCropper server address first.";
-    return;
-  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
@@ -439,23 +448,56 @@ $("exportBtn").onclick = async () => {
 };
 
 function checkServer() {
-  if (NATIVE && !serverUrl()) { $("mode").textContent = "no server"; $("mode").className = "pill"; return; }
   $("mode").textContent = "…";
-  fetch(api("status")).then((r) => r.json()).then((s) => {
-    $("mode").textContent = s.cce_mode === "live" ? "CCE live" : "Demo prices";
-    $("mode").className = "pill " + s.cce_mode;
+  backendStatus().then((st) => {
+    const live = st.cce_mode === "live";
+    $("mode").textContent = live ? "CCE live" : "Demo prices";
+    $("mode").className = "pill " + st.cce_mode;
+    $("startHint").hidden = !(NATIVE && !live);
   }).catch(() => { $("mode").textContent = "offline"; $("mode").className = "pill"; });
 }
-$("serverUrl").value = serverUrl();
-$("serverBox").hidden = !NATIVE && !serverUrl();
-$("serverBox").open = NATIVE && !serverUrl();
-$("saveServer").onclick = () => {
-  let v = $("serverUrl").value.trim().replace(/\/+$/, "");
-  if (v && !/^https?:\/\//i.test(v)) v = "https://" + v;
-  $("serverUrl").value = v;
-  store("serverUrl", v);
-  $("startErr").hidden = true;
+
+// ---------------------------------------------------------------- settings (app)
+
+function openSettings() {
+  const f = $("settingsForm").elements;
+  for (const k of SETTING_KEYS) f[k].value = store(k) || "";
+  $("settingsStatus").textContent = "";
+  $("sheet").hidden = true; $("caseSheet").hidden = true; openCode = null;
+  $("settingsSheet").hidden = false;
+}
+function saveSettings() {
+  const f = $("settingsForm").elements;
+  for (const k of SETTING_KEYS) {
+    let v = f[k].value.trim();
+    if (k === "serverUrl" && v) {
+      v = v.replace(/\/+$/, "");
+      if (!/^https?:\/\//i.test(v)) v = "https://" + v;
+      f[k].value = v;
+    }
+    if (k === "cceSearchUrl" && v.startsWith(CCE_HOST)) v = v.slice(CCE_HOST.length);
+    store(k, v);
+  }
+  // Prices may change with the new settings: look everything up again.
+  for (const code of coins.keys()) lookup(code);
   checkServer();
+}
+const CCE_HOST = "https://www.certifiedcoinexchange.com";
+$("settingsBtn").hidden = !NATIVE;
+$("startSettings").hidden = !NATIVE;
+$("settingsBtn").onclick = openSettings;
+$("startSettings").onclick = openSettings;
+$("settingsForm").onsubmit = (e) => {
+  e.preventDefault(); saveSettings();
+  $("settingsStatus").textContent = "Saved.";
+};
+$("testLogin").onclick = async () => {
+  saveSettings();
+  const st = $("settingsStatus");
+  if (!onDevice()) { st.textContent = "Using a server: its own CCE login is used."; return; }
+  st.textContent = "Signing in to CCE…";
+  try { await device.testLogin(); st.textContent = "✓ Signed in to CCE."; }
+  catch (e) { st.textContent = "✗ " + (e.message || e); }
 };
 checkServer();
 
