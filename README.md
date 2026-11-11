@@ -61,7 +61,7 @@ because browsers won't let one site read another site's pages.)
 * **Set up:** tap ⚙ → enter your CCE **user id**, **password** and **bid page
   address** (see [Connecting to CCE](#connecting-to-cce); you can paste the
   full `https://www.certifiedcoinexchange.com/…` address) → **Test CCE login**
-  → **Save**. Optionally add a PCGS API token.
+  → **Save**. Optionally import your grading API keys (see [Grading APIs](#grading-apis-identify-coins-from-the-cert-recommended)).
 * **Scanning:** the app runs Google ML Kit on every camera frame for both
   **barcodes and label text**. If a barcode can't be read, the slab is still
   identified from its label, e.g. PCGS's `7268.64/2401136` line (PCGS #,
