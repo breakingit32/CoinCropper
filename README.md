@@ -62,6 +62,11 @@ because browsers won't let one site read another site's pages.)
   address** (see [Connecting to CCE](#connecting-to-cce); you can paste the
   full `https://www.certifiedcoinexchange.com/…` address) → **Test CCE login**
   → **Save**. Optionally add a PCGS API token.
+* **Scanning:** the app runs Google ML Kit on every camera frame for both
+  **barcodes and label text**. If a barcode can't be read, the slab is still
+  identified from its label, e.g. PCGS's `7268.64/2401136` line (PCGS #,
+  grade, cert) or an NGC cert like `6521437-005`, and a card appears on it.
+  For coins read from text only, `{barcode}` sends the cert number.
 * Until CCE is set up it shows demo prices. Your login is stored only on the
   phone. Under **Advanced** you can still point the app at a server instead.
 
@@ -116,7 +121,7 @@ page's address, replacing the coin-specific parts with placeholders:
 | `{grade}`     | `MS65`, `PR69 DCAM`|
 | `{grade_num}` | `65`               |
 | `{service}`   | `PCGS`, `NGC`      |
-| `{barcode}`   | the full scanned barcode, exactly as read (best: CCE can look coins up by it) |
+| `{barcode}`   | the full scanned barcode, exactly as read (best: CCE can look coins up by it); the cert number if only the label text was read |
 | `{cert}`      | `45678912`         |
 | `{query}`     | `1881-S $1 MS65`   |
 

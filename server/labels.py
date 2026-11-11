@@ -37,6 +37,31 @@ NGC_CERT_RE = re.compile(r"^(\d{6,8})-(\d{3})$")
 DIGITS_RE = re.compile(r"^\d{6,20}$")
 CERT_IN_TEXT_RE = re.compile(r"\b(\d{7,8}(?:-\d{3})?)\b")
 PCGS_NO_IN_TEXT_RE = re.compile(r"\b(?:PCGS\s*#?|#)\s*(\d{3,6})\b", re.I)
+# The line under the grade on PCGS labels: "<PCGS#>.<grade>/<cert>", e.g. 7268.64/2401136
+PCGS_LINE_RE = re.compile(r"\b(\d{3,6})\s?\.\s?(\d{2})(\+)?\s?/\s?(\d{7,9})\b")
+NGC_CERT_IN_TEXT_RE = re.compile(r"\b(\d{6,8}-\d{3})\b")
+
+
+def grade_from_number(num: int, proof: bool = False) -> str:
+    """Best-guess grade prefix when only the number was read."""
+    if num >= 60:
+        return f"{'PR' if proof else 'MS'}{num}"
+    for low, prefix in ((50, "AU"), (40, "XF"), (20, "VF"), (12, "F"), (8, "VG"), (4, "G"), (3, "AG"), (2, "FR")):
+        if num >= low:
+            return f"{prefix}{num}"
+    return f"PO{num}"
+
+
+def label_anchor(line: str) -> Optional[dict]:
+    """If an OCR line identifies a slab (PCGS#.grade/cert or an NGC cert), say so."""
+    m = PCGS_LINE_RE.search(line)
+    if m:
+        return {"service": "PCGS", "pcgs_no": m.group(1), "grade_num": int(m.group(2)),
+                "plus": bool(m.group(3)), "cert": m.group(4)}
+    m = NGC_CERT_IN_TEXT_RE.search(line)
+    if m:
+        return {"service": "NGC", "cert": m.group(1)}
+    return None
 
 
 @dataclass
@@ -159,6 +184,17 @@ def parse_label_text(text: str) -> SlabInfo:
 
     info.grade, info.grade_num = normalise_grade(upper)
 
+    line = PCGS_LINE_RE.search(upper)
+    if line:
+        info.service = "PCGS"
+        info.pcgs_no, info.cert = line.group(1), line.group(4)
+        num = int(line.group(2))
+        if info.grade_num != num:
+            proof = bool(re.search(r"\b(PR|PF|PROOF)\b", upper))
+            info.grade = grade_from_number(num, proof) + ("+" if line.group(3) else "")
+            info.grade_num = num
+        return _finish_label(info, lines)
+
     m = CERT_IN_TEXT_RE.search(upper)
     if m:
         info.cert = m.group(1)
@@ -166,7 +202,10 @@ def parse_label_text(text: str) -> SlabInfo:
     m = PCGS_NO_IN_TEXT_RE.search(upper)
     if m:
         info.pcgs_no = m.group(1)
+    return _finish_label(info, lines)
 
+
+def _finish_label(info: SlabInfo, lines: list[str]) -> SlabInfo:
     for ln in lines:
         ym = YEAR_RE.search(ln)
         if ym:

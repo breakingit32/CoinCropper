@@ -12,6 +12,25 @@ const NGC_CERT_RE = /^(\d{6,8})-(\d{3})$/;
 const DIGITS_RE = /^\d{6,20}$/;
 const CERT_IN_TEXT_RE = /\b(\d{7,8}(?:-\d{3})?)\b/;
 const PCGS_NO_IN_TEXT_RE = /\b(?:PCGS\s*#?|#)\s*(\d{3,6})\b/i;
+// The line under the grade on PCGS labels: "<PCGS#>.<grade>/<cert>", e.g. 7268.64/2401136
+const PCGS_LINE_RE = /\b(\d{3,6})\s?\.\s?(\d{2})(\+)?\s?\/\s?(\d{7,9})\b/;
+const NGC_CERT_IN_TEXT_RE = /\b(\d{6,8}-\d{3})\b/;
+
+export function gradeFromNumber(num, proof = false) {
+  if (num >= 60) return `${proof ? "PR" : "MS"}${num}`;
+  for (const [low, p] of [[50, "AU"], [40, "XF"], [20, "VF"], [12, "F"], [8, "VG"], [4, "G"], [3, "AG"], [2, "FR"]])
+    if (num >= low) return `${p}${num}`;
+  return `PO${num}`;
+}
+
+// If an OCR line identifies a slab (PCGS#.grade/cert or an NGC cert), say so.
+export function labelAnchor(line) {
+  let m = PCGS_LINE_RE.exec(String(line || "").toUpperCase());
+  if (m) return { service: "PCGS", pcgs_no: m[1], grade_num: +m[2], plus: !!m[3], cert: m[4] };
+  m = NGC_CERT_IN_TEXT_RE.exec(String(line || ""));
+  if (m) return { service: "NGC", cert: m[1] };
+  return null;
+}
 
 export function emptyCoin(raw = "") {
   return { raw, service: null, cert: null, pcgs_no: null, grade: null, grade_num: null,
@@ -93,8 +112,18 @@ export function parseLabelText(text) {
   const upper = text.toUpperCase();
   for (const svc of SERVICES) if (new RegExp(`\\b${svc}\\b`).test(upper)) { info.service = svc; break; }
   [info.grade, info.grade_num] = normaliseGrade(upper);
-  let m = CERT_IN_TEXT_RE.exec(upper); if (m) info.cert = m[1];
-  m = PCGS_NO_IN_TEXT_RE.exec(upper); if (m) info.pcgs_no = m[1];
+  const line = PCGS_LINE_RE.exec(upper);
+  if (line) {
+    info.service = "PCGS"; info.pcgs_no = line[1]; info.cert = line[4];
+    const num = +line[2];
+    if (info.grade_num !== num) {
+      info.grade = gradeFromNumber(num, /\b(PR|PF|PROOF)\b/.test(upper)) + (line[3] ? "+" : "");
+      info.grade_num = num;
+    }
+  } else {
+    let m = CERT_IN_TEXT_RE.exec(upper); if (m) info.cert = m[1];
+    m = PCGS_NO_IN_TEXT_RE.exec(upper); if (m) info.pcgs_no = m[1];
+  }
   for (const ln of upper.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
     const y = YEAR_RE.exec(ln);
     if (y) {
@@ -214,7 +243,7 @@ export function buildSearchUrl(template, base, c) {
   let url = template
     .replaceAll("{pcgs_no}", enc(c.pcgs_no)).replaceAll("{grade}", enc(c.grade))
     .replaceAll("{grade_num}", c.grade_num ?? "").replaceAll("{service}", enc(c.service))
-    .replaceAll("{cert}", enc(c.cert)).replaceAll("{barcode}", enc(c.raw)).replaceAll("{query}", enc(query));
+    .replaceAll("{cert}", enc(c.cert)).replaceAll("{barcode}", enc(c.raw || c.cert)).replaceAll("{query}", enc(query));
   if (url.startsWith("/")) url = base.replace(/\/+$/, "") + url;
   return url;
 }

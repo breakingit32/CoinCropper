@@ -42,3 +42,18 @@ def test_label_text():
     assert i.cert == "45678912"
     assert i.pcgs_no == "7144"
     assert i.description == "1881-S $1"
+
+
+def test_pcgs_label_line():
+    from server.labels import label_anchor
+    i = parse_label_text("PCGS\n1900-O/CC S$1\nMS64\n7268.64/2401136")
+    assert (i.service, i.pcgs_no, i.cert, i.grade, i.grade_num) == ("PCGS", "7268", "2401136", "MS64", 64)
+    assert i.description == "1900-O/CC S$1"
+    i = parse_label_text("1904-O\nPCGS MS65DMPL\n97293.65/04387865")
+    assert (i.pcgs_no, i.cert, i.grade_num) == ("97293", "04387865", 65)
+    # grade only from the number line
+    i = parse_label_text("1895-O $1\n7236.55/12345678")
+    assert i.grade == "AU55"
+    assert label_anchor("7286.66+/44668573")["plus"] is True
+    assert label_anchor("6521437-005") == {"service": "NGC", "cert": "6521437-005"}
+    assert label_anchor("1900-O/CC") is None

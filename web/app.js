@@ -1,6 +1,7 @@
 // CoinCropper — point the phone at slabbed coins, get CCE bids floating over each one.
 
 import { makeDeviceBackend } from "./device.js";
+import { labelAnchor } from "./core.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
@@ -194,22 +195,29 @@ async function makeZXingDetector() {
 
 // ---------------------------------------------------------------- lookups
 
-async function lookup(code, extra = {}) {
-  const coin = coins.get(code) || { code, overrides: {} };
-  coins.set(code, coin);
+// Coins are keyed by their track key: the barcode value, or the cert number when
+// the slab was identified from its label text.  coin.code is the scanned barcode
+// ("" when none has been read yet).
+async function lookup(key, extra = {}) {
+  const coin = coins.get(key) || { code: key, overrides: {} };
+  coins.set(key, coin);
   Object.assign(coin.overrides, extra);
   coin.status = "loading";
   coin.error = null;
-  renderTags(); if (openCode === code) renderSheet();
+  const seq = (coin.seq = (coin.seq || 0) + 1);
+  renderTags(); if (openCode === key) renderSheet();
   try {
-    coin.result = await backendLookup({ code, ...coin.overrides });
-    coin.status = coin.result.bids.error ? "error" : "ok";
-    coin.error = coin.result.bids.error;
+    const result = await backendLookup({ ...coin.overrides, code: coin.code });
+    if (seq !== coin.seq) return;           // a newer lookup for this coin is running
+    coin.result = result;
+    coin.status = result.bids.error ? "error" : "ok";
+    coin.error = result.bids.error;
   } catch (e) {
+    if (seq !== coin.seq) return;
     coin.status = "error"; coin.error = e.message;
   }
   updateCase();
-  if (openCode === code) renderSheet();
+  if (openCode === key) renderSheet();
 }
 
 function coinTitle(coin) {
@@ -221,61 +229,120 @@ function coinTitle(coin) {
 
 // ---------------------------------------------------------------- scanning
 
+// found: [{key, box, code?, ocr?}] — code = barcode value, ocr = label text.
 function ingest(found) {
   const now = performance.now();
   for (const f of found) {
-    const code = f.rawValue?.trim();
-    if (!code) continue;
-    let t = tracks.get(code);
+    const key = f.key?.trim();
+    if (!key) continue;
+    let t = tracks.get(key);
     if (!t) {
       t = { box: { ...f.box }, lastSeen: now, el: null };
-      tracks.set(code, t);
-      if (!coins.has(code)) lookup(code);
+      tracks.set(key, t);
     } else {   // smooth jitter
       const a = 0.55;
       for (const k of ["x", "y", "w", "h"]) t.box[k] += (f.box[k] - t.box[k]) * a;
     }
     t.raw = { ...f.box };
     t.lastSeen = now;
+
+    let coin = coins.get(key), changed = false;
+    if (!coin) {
+      coin = { code: f.code || "", overrides: {} };
+      coins.set(key, coin);
+      changed = true;
+    }
+    if (f.code && !coin.code) { coin.code = f.code; changed = true; }
+    if (f.ocr && !coin.overrides.ocr_text) { coin.overrides.ocr_text = f.ocr; changed = true; }
+    if (changed) lookup(key);
   }
 }
 
-// Android app: Google's ML Kit scanner (via @capacitor-mlkit/barcode-scanning).
-// Far better than ZXing on small, dense or slightly blurry slab barcodes, reads
-// many at once, and runs the camera's own autofocus.  The camera preview is a
-// native view behind the (transparent) page.
-const ML_FORMATS = ["CODE_128", "QR_CODE", "CODE_39", "DATA_MATRIX", "PDF_417", "ITF", "CODE_93"];
+// Once label text ties a barcode to a cert number, the barcode's track and coin
+// are re-keyed by the cert so barcode and text sightings land on one card.
+const aliases = new Map();   // barcode value -> cert
+function linkBarcode(raw, cert) {
+  if (aliases.get(raw) === cert) return;
+  aliases.set(raw, cert);
+  const oldT = tracks.get(raw), oldC = coins.get(raw);
+  if (oldT) {
+    if (!tracks.has(cert)) tracks.set(cert, oldT); else oldT.el?.remove();
+    tracks.delete(raw);
+  }
+  if (oldC) {
+    const target = coins.get(cert);
+    if (!target) coins.set(cert, oldC);
+    else if (!target.code) { target.code = raw; lookup(cert); }
+    coins.delete(raw);
+    if (openCode === raw) openCode = cert;
+  }
+}
+
+// ---------------------------------------------------------------- Android camera
+
+// Android app: SlabScanner (mobile/android/.../SlabScannerPlugin.java) runs the
+// camera natively and sends every frame's ML Kit barcode + text results.  The
+// camera preview is a native view behind the (transparent) page.
+function frameMapper(ev) {
+  const v = ev.view, dpr = window.devicePixelRatio || 1;
+  const vw = v.w || innerWidth * dpr, vh = v.h || innerHeight * dpr;
+  const s = Math.max(vw / ev.width, vh / ev.height);
+  const ox = (v.x || 0) + (vw - ev.width * s) / 2, oy = (v.y || 0) + (vh - ev.height * s) / 2;
+  return (corners) => {
+    const xs = corners.map((p) => (p[0] * s + ox) / dpr), ys = corners.map((p) => (p[1] * s + oy) / dpr);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+  };
+}
+const cx = (b) => b.x + b.w / 2, cy = (b) => b.y + b.h / 2;
+const hOverlap = (a, b) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+
+export function handleFrame(ev) {
+  if (paused || !ev?.width) return;
+  const map = frameMapper(ev);
+  const bars = (ev.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), box: map(b.corners) }));
+  const found = [];
+  if (ev.lines) {
+    const lines = ev.lines.map((l) => ({ text: l.text, block: l.block, box: map(l.corners) }));
+    for (const a of lines) {
+      const id = labelAnchor(a.text);
+      if (!id) continue;
+      const lh = a.box.h || 10;
+      // The rest of the label: lines above the cert line (year, denomination, grade).
+      const ctx = lines.filter((l) => l === a || l.block === a.block ||
+        (l.box.y < a.box.y + lh && a.box.y - l.box.y < lh * 6 &&
+         hOverlap(l.box, { x: a.box.x - a.box.w * 0.6, w: a.box.w * 2.2 }) > 0));
+      ctx.sort((p, q) => p.box.y - q.box.y || p.box.x - q.box.x);
+      const ocr = ctx.map((l) => l.text).join("\n");
+      // Barcode printed just below/above that line on the same label?
+      const bar = bars.find((b) => hOverlap(b.box, a.box) > Math.min(b.box.w, a.box.w) * 0.3 &&
+        Math.abs(cy(b.box) - cy(a.box)) < lh * 3 + b.box.h);
+      if (bar) { linkBarcode(bar.raw, id.cert); bar.ocr = ocr; }
+      else found.push({ key: id.cert, box: a.box, ocr });
+    }
+  }
+  for (const b of bars) found.push({ key: aliases.get(b.raw) || b.raw, box: b.box, code: b.raw, ocr: b.ocr });
+  ingest(found);
+}
+
 async function startNativeScanner() {
   const cap = window.Capacitor;
   if (!NATIVE || !cap?.nativePromise || !cap.addListener) return false;
-  try {
-    const { supported } = await cap.nativePromise("BarcodeScanner", "isSupported", {});
-    if (!supported) return false;
-  } catch { return false; }   // plugin not in this build
-  cap.addListener("BarcodeScanner", "barcodesScanned", (ev) => {
-    if (paused) return;
-    const dpr = window.devicePixelRatio || 1;
-    ingest((ev?.barcodes || []).filter((b) => b.cornerPoints?.length).map((b) => {
-      const xs = b.cornerPoints.map((p) => p[0] / dpr), ys = b.cornerPoints.map((p) => p[1] / dpr);
-      const x = Math.min(...xs), y = Math.min(...ys);
-      return { rawValue: b.rawValue || b.displayValue, box: { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y } };
-    }));
-  });
+  cap.addListener("SlabScanner", "frame", handleFrame);
   document.documentElement.classList.add("native-cam");
+  let res;
   try {
-    await cap.nativePromise("BarcodeScanner", "startScan", { formats: ML_FORMATS, lensFacing: "BACK", resolution: 2 });
+    res = await cap.nativePromise("SlabScanner", "start", { ocr: true });
   } catch (e) {
     document.documentElement.classList.remove("native-cam");
+    if (/not implemented|UNIMPLEMENTED|not available/i.test(`${e.code} ${e.message}`)) return false;
     $("startErr").hidden = false;
     $("startErr").textContent = `Camera unavailable: ${e.message || e}`;
     throw e;
   }
   nativeCam = true;
-  try {
-    const { available } = await cap.nativePromise("BarcodeScanner", "isTorchAvailable", {});
-    $("torchBtn").hidden = !available;
-  } catch { /* optional */ }
-  $("ocrBtn").hidden = true;   // no camera frames to read text from in this mode
+  $("torchBtn").hidden = !res?.torch;
+  $("ocrBtn").hidden = true;   // label text is read live in this mode
   return true;
 }
 
@@ -284,7 +351,7 @@ async function scanLoop() {
     const t0 = performance.now();
     if (!paused && video.readyState >= 2) {
       try {
-        ingest(await detector.detect(video));
+        ingest((await detector.detect(video)).map((f) => ({ key: f.rawValue, code: f.rawValue, box: f.box })));
       } catch (e) { console.warn(e); }
     }
     await new Promise((r) => setTimeout(r, Math.max(0, SCAN_INTERVAL_MS - (performance.now() - t0))));
@@ -366,7 +433,7 @@ function renderSheet() {
   $("cceLink").href = res.cce_url || "https://www.certifiedcoinexchange.com";
   $("verifyLink").hidden = !res.verify_url;
   if (res.verify_url) $("verifyLink").href = res.verify_url;
-  const notes = [...(c.notes || []), `Barcode: ${coin.code}`];
+  const notes = [...(c.notes || []), coin.code ? `Barcode: ${coin.code}` : "Read from label text"];
   if (b.source === "mock") notes.unshift("Demo prices — connect your CCE account on the server for live bids.");
   $("dNotes").textContent = notes.join(" · ");
 }
@@ -469,7 +536,7 @@ let torchOn = false;
 $("torchBtn").onclick = async () => {
   torchOn = !torchOn;
   try {
-    if (nativeCam) await window.Capacitor.nativePromise("BarcodeScanner", torchOn ? "enableTorch" : "disableTorch", {});
+    if (nativeCam) await window.Capacitor.nativePromise("SlabScanner", "setTorch", { on: torchOn });
     else await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: torchOn }] });
   } catch {}
   $("torchBtn").classList.toggle("on", torchOn);
@@ -558,4 +625,4 @@ checkServer();
 
 if (!NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 requestAnimationFrame(frame);
-window.__coincropper = { tracks, coins, lookup };  // handy for debugging
+window.__coincropper = { tracks, coins, lookup, handleFrame, aliases };  // handy for debugging

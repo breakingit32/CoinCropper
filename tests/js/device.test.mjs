@@ -35,10 +35,9 @@ await page.addInitScript(() => {
     isNativePlatform: () => true,
     addListener: (plugin, event, cb) => { window.__scan.listeners.push({ plugin, event, cb }); return { remove() {} }; },
     nativePromise: async (plugin, method, o) => {
-      if (plugin === "BarcodeScanner") {
+      if (plugin === "SlabScanner") {
         window.__scan.calls.push({ method, o });
-        if (method === "isSupported") return { supported: true };
-        if (method === "isTorchAvailable") return { available: true };
+        if (method === "start") return { torch: true };
         return {};
       }
       log.push({ plugin, method: o.method, url: o.url, data: o.data, dataType: o.dataType });
@@ -110,28 +109,65 @@ r = await page.evaluate(async () => {
 const after = await page.evaluate(() => window.__cceLog.filter((l) => l.method === "POST").length);
 check(r.high_bid === 1250 && after === before + 1, "re-login when CCE says signed out");
 
-// 6. Camera: ML Kit scanner path (Android app).
+// 6. Camera: native SlabScanner (ML Kit barcodes + text) path.
 await page.click("[data-close=settingsSheet]");
 await page.click("#startBtn");
 await page.waitForFunction(() => document.documentElement.classList.contains("native-cam"));
-const start = await page.evaluate(() => window.__scan.calls.find((c) => c.method === "startScan"));
-check(start && start.o.formats.includes("CODE_128") && start.o.resolution === 2, "starts ML Kit scan (Code 128, 1080p)");
+const start = await page.evaluate(() => window.__scan.calls.find((c) => c.method === "start"));
+check(start && start.o.ocr === true, "starts native scanner with OCR");
 check(await page.isVisible("#controls") && !(await page.isVisible("#start")), "camera controls shown");
 check(await page.isVisible("#torchBtn"), "flashlight button shown");
-// Barcode in physical pixels; page has devicePixelRatio 2 -> CSS box 50,300 200x40.
-await page.evaluate(() => {
-  const l = window.__scan.listeners.find((x) => x.event === "barcodesScanned");
-  l.cb({ barcodes: [{ rawValue: "6521437-005", cornerPoints: [[100, 600], [500, 600], [500, 680], [100, 680]] }] });
-});
-await page.waitForFunction(() => window.__coincropper.coins.get("6521437-005")?.status);
+// Image = preview size in device px (824x1830 at DPR 2) so CSS = image px / 2.
+const frame = (barcodes, lines) => page.evaluate(([barcodes, lines]) => {
+  const l = window.__scan.listeners.find((x) => x.plugin === "SlabScanner" && x.event === "frame");
+  l.cb({ width: 824, height: 1830, view: { x: 0, y: 0, w: 824, h: 1830 }, barcodes, ...(lines ? { lines } : {}) });
+}, [barcodes, lines]);
+const rect = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+const waitCoin = (k) => page.waitForFunction((k) => window.__coincropper.coins.get(k)?.status === "ok" ||
+  window.__coincropper.coins.get(k)?.status === "error", k);
+
+// a) Barcode only.
+await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) }]);
+await waitCoin("6521437-005");
 const tag = await page.evaluate(() => {
   const b = window.__coincropper.tracks.get("6521437-005").el.querySelector(".box").style;
-  return { left: b.left, top: b.top, width: b.width, height: b.height };
+  return [b.left, b.top, b.width, b.height].join(" ");
 });
-check(tag.left === "50px" && tag.top === "300px" && tag.width === "200px" && tag.height === "40px",
-  `AR box placed from ML Kit corners (${JSON.stringify(tag)})`);
+check(tag === "50px 300px 200px 40px", `AR box placed from scanner corners (${tag})`);
 const ngc = await page.evaluate(() => window.__coincropper.coins.get("6521437-005").result?.coin);
-check(ngc?.service === "NGC" && ngc?.cert === "6521437-005", "NGC cert recognised from scan");
+check(ngc?.service === "NGC" && ngc?.cert === "6521437-005", "NGC cert recognised from barcode");
+
+// b) Barcode first, then the label text above it in a later frame: one coin, keyed by cert.
+const pcgsLines = [
+  { text: "PCGS", block: 0, corners: rect(300, 1000, 120, 30) },
+  { text: "1900-O/CC S$1", block: 1, corners: rect(150, 1040, 400, 40) },
+  { text: "MS64", block: 1, corners: rect(300, 1085, 120, 40) },
+  { text: "7268.64/2401136", block: 2, corners: rect(200, 1140, 420, 40) },
+];
+await frame([{ raw: "72686402401136", corners: rect(200, 1190, 420, 50) }]);
+await waitCoin("72686402401136");
+await frame([{ raw: "72686402401136", corners: rect(200, 1190, 420, 50) }], pcgsLines);
+await waitCoin("2401136");
+let st = await page.evaluate(() => ({ keys: [...window.__coincropper.coins.keys()], c: window.__coincropper.coins.get("2401136") }));
+check(!st.keys.includes("72686402401136") && st.keys.includes("2401136"), "barcode + label text merged into one coin");
+check(st.c.code === "72686402401136", "merged coin keeps the scanned barcode");
+check(st.c.result.coin.pcgs_no === "7268" && st.c.result.coin.grade === "MS64" &&
+  st.c.result.coin.description === "1900-O/CC S$1", `label text identified coin (${st.c.result.coin.description} ${st.c.result.coin.grade} #${st.c.result.coin.pcgs_no})`);
+await frame([{ raw: "72686402401136", corners: rect(200, 1190, 420, 50) }]);   // barcode-only frame again
+st = await page.evaluate(() => [...window.__coincropper.tracks.keys()]);
+check(!st.includes("72686402401136"), "later barcode-only frames stay on the same card");
+
+// c) Label text but no readable barcode.
+await frame([], [
+  { text: "1903-O", block: 5, corners: rect(60, 200, 150, 30) },
+  { text: "PCGS MS67", block: 5, corners: rect(60, 235, 200, 30) },
+  { text: "7286.67/47966447", block: 6, corners: rect(60, 270, 260, 30) },
+]);
+await waitCoin("47966447");
+const oc = await page.evaluate(() => window.__coincropper.coins.get("47966447"));
+check(oc.code === "" && oc.result.coin.grade === "MS67" && oc.result.coin.pcgs_no === "7286", "slab identified from label text alone");
+check(await page.evaluate(() => window.__coincropper.tracks.has("47966447")), "card shown for text-only slab");
+check(await page.evaluate(() => window.__coincropper.coins.size) === 4, "no duplicate coins (4 total incl. demo lookup)");
 
 // 7. {barcode} placeholder sends the full scanned value.
 const urls = await page.evaluate(async () => {
