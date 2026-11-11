@@ -14,3 +14,11 @@ def test_lookup_mock():
         assert r["verify_url"] == "https://www.pcgs.com/cert/45678912"
         assert c.get("/").status_code == 200
         assert c.get("/app.js").status_code == 200
+
+
+def test_cors_for_android_app():
+    with TestClient(app) as c:
+        r = c.options("/api/lookup", headers={
+            "Origin": "https://localhost", "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type"})
+        assert r.headers["access-control-allow-origin"] == "https://localhost"

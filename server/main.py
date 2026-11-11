@@ -12,6 +12,7 @@ from typing import Optional
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -41,6 +42,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CoinCropper", lifespan=lifespan)
+
+# The Android/iOS app (Capacitor) loads its pages from https://localhost or
+# capacitor://localhost and calls this server cross-origin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://localhost", "http://localhost", "capacitor://localhost"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 class LookupRequest(BaseModel):

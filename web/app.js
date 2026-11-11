@@ -18,6 +18,18 @@ let paused = false;
 let stream = null;
 let openCode = null;
 
+// Inside the Android app (Capacitor) the page is bundled, so API calls go to the
+// server address the user saved; on the website they go to the same origin.
+const NATIVE = !!window.Capacitor?.isNativePlatform?.();
+function store(k, v) {
+  try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
+}
+function serverUrl() { return store("serverUrl") || ""; }
+function api(path) {
+  const base = serverUrl();
+  return base ? `${base}/api/${path}` : `api/${path}`;
+}
+
 // ---------------------------------------------------------------- utilities
 
 const money = (v) => v == null ? "—" :
@@ -168,7 +180,7 @@ async function lookup(code, extra = {}) {
   coin.error = null;
   renderTags(); if (openCode === code) renderSheet();
   try {
-    const r = await fetch("api/lookup", {
+    const r = await fetch(api("lookup"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code, ...coin.overrides }),
     });
@@ -350,6 +362,12 @@ async function ocrLabel() {
 
 async function start() {
   $("startErr").hidden = true;
+  if (NATIVE && !serverUrl()) {
+    $("serverBox").open = true;
+    $("startErr").hidden = false;
+    $("startErr").textContent = "Enter your CoinCropper server address first.";
+    return;
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
@@ -420,11 +438,27 @@ $("exportBtn").onclick = async () => {
   setTimeout(() => ($("exportBtn").textContent = "Copy as CSV"), 1500);
 };
 
-fetch("api/status").then((r) => r.json()).then((s) => {
-  $("mode").textContent = s.cce_mode === "live" ? "CCE live" : "Demo prices";
-  $("mode").className = "pill " + s.cce_mode;
-}).catch(() => ($("mode").textContent = "offline"));
+function checkServer() {
+  if (NATIVE && !serverUrl()) { $("mode").textContent = "no server"; $("mode").className = "pill"; return; }
+  $("mode").textContent = "…";
+  fetch(api("status")).then((r) => r.json()).then((s) => {
+    $("mode").textContent = s.cce_mode === "live" ? "CCE live" : "Demo prices";
+    $("mode").className = "pill " + s.cce_mode;
+  }).catch(() => { $("mode").textContent = "offline"; $("mode").className = "pill"; });
+}
+$("serverUrl").value = serverUrl();
+$("serverBox").hidden = !NATIVE && !serverUrl();
+$("serverBox").open = NATIVE && !serverUrl();
+$("saveServer").onclick = () => {
+  let v = $("serverUrl").value.trim().replace(/\/+$/, "");
+  if (v && !/^https?:\/\//i.test(v)) v = "https://" + v;
+  $("serverUrl").value = v;
+  store("serverUrl", v);
+  $("startErr").hidden = true;
+  checkServer();
+};
+checkServer();
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if (!NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 requestAnimationFrame(frame);
 window.__coincropper = { tracks, coins, lookup };  // handy for debugging

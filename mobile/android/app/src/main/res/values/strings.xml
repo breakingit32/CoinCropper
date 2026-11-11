@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CoinCropper</string>
+    <string name="title_activity_main">CoinCropper</string>
+    <string name="package_name">com.coincropper.app</string>
+    <string name="custom_url_scheme">com.coincropper.app</string>
+</resources>

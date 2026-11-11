@@ -44,6 +44,23 @@ your service → **Environment** (`CCE_MODE=live`, `CCE_USER_ID`,
 [Connecting to CCE](#connecting-to-cce). Render's free plan sleeps when idle,
 so the first scan after a break can take ~30 seconds.
 
+### Android app (APK)
+
+There's also a real Android app in `mobile/` (Capacitor). It bundles the
+phone UI and talks to your server over the internet.
+
+* **Get the APK:** GitHub → **Actions** → **Android APK** → latest run →
+  download **CoinCropper-apk**. Or build it yourself with Android Studio /
+  the Android SDK: `cd mobile && npm ci && npm run apk`
+  (output: `mobile/android/app/build/outputs/apk/debug/app-debug.apk`).
+* **Install:** open the APK on the phone and allow *Install unknown apps* for
+  your browser/Files app when Android asks.
+* **First launch:** under **Server**, enter your server's address (e.g.
+  `https://coincropper.onrender.com`), tap **Save**, then **Start camera**.
+
+It's a debug-signed build for installing yourself; publishing to Google Play
+would need a release signing key.
+
 ## Run it on your own computer
 
 ```bash

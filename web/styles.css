@@ -99,3 +99,7 @@ summary { cursor: pointer; font-weight: 600; }
 .case-list li { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0;
   border-bottom: 1px solid #ffffff10; cursor: pointer; }
 .case-list .p { color: var(--green); font-weight: 600; white-space: nowrap; }
+#serverBox { text-align: left; }
+.server-row { margin-top: 10px; }
+.server-row input { flex: 3; min-width: 0; background: var(--bg); border: 1px solid #ffffff22; border-radius: 8px;
+  padding: 9px; color: var(--text); }

@@ -1,0 +1,30 @@
+name: Android APK
+
+on:
+  push:
+    paths: ["web/**", "mobile/**", ".github/workflows/android-apk.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: android-actions/setup-android@v3
+      - name: Build debug APK
+        working-directory: mobile
+        run: |
+          npm ci
+          npx cap sync android
+          cd android && ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CoinCropper-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
