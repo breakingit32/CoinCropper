@@ -27,7 +27,24 @@ current **CCE (Certified Coin Exchange) bid** floating over each slab, live, in 
   export it as CSV.
 * Installable as a home-screen app (PWA), flashlight toggle where supported.
 
-## Run it
+## Install on your phone
+
+1. **Put the server online (free).** Sign in at [render.com](https://render.com)
+   with GitHub → **New → Blueprint** → pick this repo. Render reads
+   `render.yaml` and gives you an address like `https://coincropper.onrender.com`.
+   (Any host that runs Docker works too; there's a `Dockerfile`.)
+2. **Open that address on your phone.**
+   * **iPhone (Safari):** Share button → **Add to Home Screen** → Add.
+   * **Android (Chrome):** ⋮ menu → **Install app** / **Add to Home screen**.
+3. Open **CoinCropper** from your home screen → **Start camera** → Allow.
+
+It starts with demo prices. For live bids, add your CCE login in Render →
+your service → **Environment** (`CCE_MODE=live`, `CCE_USER_ID`,
+`CCE_PASSWORD`, `CCE_SEARCH_URL`, optionally `PCGS_API_TOKEN`), see
+[Connecting to CCE](#connecting-to-cce). Render's free plan sleeps when idle,
+so the first scan after a break can take ~30 seconds.
+
+## Run it on your own computer
 
 ```bash
 pip install -r requirements.txt

@@ -1,0 +1,19 @@
+# One-click deploy on Render (free plan gives an https:// URL).
+services:
+  - type: web
+    name: coincropper
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: CCE_MODE
+        value: mock
+      - key: CCE_USER_ID
+        sync: false
+      - key: CCE_PASSWORD
+        sync: false
+      - key: CCE_SEARCH_URL
+        sync: false
+      - key: PCGS_API_TOKEN
+        sync: false
