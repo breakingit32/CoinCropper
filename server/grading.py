@@ -165,3 +165,78 @@ class Grading:
         except (RuntimeError, httpx.HTTPError) as e:
             notes.append(f"CAC lookup failed: {e}")
         return g, notes
+
+
+# ------------------------------------------------------------- Greysheet (CDN Public API)
+
+GREYSHEET = "https://cpgpublicapiv2.greysheet.com/api"
+
+
+def _gs_money(v) -> Optional[float]:
+    m = re.search(r"[0-9][0-9,]*(?:\.\d+)?", str(v or ""))
+    n = float(m.group(0).replace(",", "")) if m else 0
+    return n if n > 0 else None
+
+
+def greysheet_from_response(data: dict, grade_num: int, cac: Optional[str]) -> Optional[dict]:
+    sets = (data or {}).get("Data") or []
+    if not sets:
+        return None
+    s = sets[0]
+    rows = [r for r in s.get("PricingData") or [] if int(r.get("Grade") or 0) == int(grade_num)]
+    if not rows:
+        return {"gsid": s.get("GsId"), "name": s.get("Name"), "grade": grade_num, "none": True}
+    plain = next((r for r in rows if not r.get("IsCac")), rows[0])
+    with_cac = next((r for r in rows if r.get("IsCac")), None)
+    return {
+        "gsid": s.get("GsId"), "name": s.get("Name"), "grade": grade_num, "grade_label": plain.get("GradeLabel"),
+        "grey": _gs_money(plain.get("GreyVal")), "cpg": _gs_money(plain.get("CpgVal")),
+        "pcgs": _gs_money(plain.get("PcgsVal")), "ngc": _gs_money(plain.get("NgcVal")),
+        "bluebook": _gs_money(plain.get("BlueBookVal")),
+        "grey_cac": _gs_money(with_cac.get("GreyVal")) if with_cac else None,
+        "cpg_cac": _gs_money(with_cac.get("CpgVal")) if with_cac else None,
+        "cac": bool(cac),
+    }
+
+
+class Greysheet:
+    def __init__(self, client: httpx.AsyncClient, key: str, token: str):
+        self.client, self.key, self.token = client, key, token
+        self.cache: dict[str, tuple[float, Optional[dict]]] = {}
+
+    async def _call(self, params: dict, advanced: bool):
+        p = dict(params, **({"ApiLevel": "advanced"} if advanced else {}))
+        r = await self.client.get(f"{GREYSHEET}/GetPricingRequest", params=p, timeout=15,
+                                  headers={"x-api-token": self.token, "x-api-key": self.key, "Accept": "application/json"})
+        try:
+            data = r.json()
+        except ValueError:
+            data = None
+        if r.status_code in (401, 403) or (data or {}).get("PermitAccess") is False:
+            return None, (data or {}).get("AccessDeniedMessage") or f"HTTP {r.status_code}"
+        if r.status_code != 200:
+            raise RuntimeError(f"Greysheet HTTP {r.status_code}")
+        if (data or {}).get("ErrorText"):
+            raise RuntimeError(f"Greysheet: {data['ErrorText']}")
+        return data, None
+
+    async def price(self, pcgs_no: Optional[str], grade_num: Optional[int], cac: Optional[str]) -> Optional[dict]:
+        if not (self.key and self.token and pcgs_no and grade_num):
+            return None
+        k = f"{pcgs_no}:{grade_num}"
+        hit = self.cache.get(k)
+        if hit and time.time() - hit[0] < 86400:
+            return dict(hit[1], cac=bool(cac)) if hit[1] else None
+        params = {"PcgsNumber": str(pcgs_no), "Grade": str(grade_num)}
+        data, denied = await self._call(params, True)
+        tier = "advanced"
+        if denied:
+            data, denied = await self._call(params, False)
+            tier = "basic"
+        if denied:
+            raise RuntimeError(f"Greysheet refused the key: {denied}")
+        g = greysheet_from_response(data, grade_num, cac)
+        if g:
+            g["tier"] = tier
+        self.cache[k] = (time.time(), g)
+        return g

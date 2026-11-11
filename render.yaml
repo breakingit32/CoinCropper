@@ -21,3 +21,7 @@ services:
         sync: false
       - key: CACG_API_TOKEN
         sync: false
+      - key: GREYSHEET_API_KEY
+        sync: false
+      - key: GREYSHEET_API_TOKEN
+        sync: false

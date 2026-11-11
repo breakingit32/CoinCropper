@@ -4,7 +4,7 @@
 //
 // secrets.local.json:
 //   { "cceUser": "...", "ccePass": "...", "pcgsTokens": ["key1", "key2"],
-//     "cacgKey": "...", "cacgToken": "...", "ngcToken": "..." }
+//     "cacgKey": "...", "cacgToken": "...", "gsKey": "...", "gsToken": "...", "ngcToken": "..." }
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.join(here, "..", "secrets.local.json");
 const out = path.join(here, "..", "android", "app", "src", "main", "assets", "public", "builtin.local.js");
-const KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "ngcToken"];
+const KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken"];
 
 let data = {};
 if (fs.existsSync(src)) {

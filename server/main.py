@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .grading import Grading, coin_from_grading
+from .grading import Grading, Greysheet, coin_from_grading
 from .cce import BidResult, CCEClient, CCEError, mock_bids
 from .config import settings
 from .labels import SlabInfo, normalise_grade, parse_barcode, parse_label_text
@@ -35,6 +35,7 @@ async def lifespan(app: FastAPI):
         settings.cce_search_url,
     ) if settings.cce_mode == "live" else None
     state["cache"] = {}
+    state["greysheet"] = Greysheet(state["http"], settings.greysheet_api_key, settings.greysheet_api_token)
     state["grading"] = Grading(state["http"], list(settings.pcgs_api_tokens),
                                settings.cacg_api_key, settings.cacg_api_token)
     yield
@@ -122,10 +123,16 @@ def verify_url(coin: SlabInfo) -> Optional[str]:
 async def lookup(req: LookupRequest) -> dict:
     coin, g = await identify(req)
     bids = await get_bids(coin)
+    grey = None
+    try:
+        grey = await state["greysheet"].price(coin.pcgs_no, coin.grade_num, (g or {}).get("cac"))
+    except (RuntimeError, httpx.HTTPError) as e:
+        coin.notes.append(str(e))
     return {
         "coin": coin.to_dict(),
         "bids": bids.to_dict(),
         "grading": g,
+        "greysheet": grey,
         "verify_url": verify_url(coin),
         "cce_url": bids.url or settings.cce_base_url,
     }
@@ -138,6 +145,7 @@ async def status() -> dict:
         "cce_configured": bool(settings.cce_user_id and settings.cce_password),
         "pcgs_api": bool(settings.pcgs_api_tokens),
         "cac_api": bool(settings.cacg_api_key and settings.cacg_api_token),
+        "greysheet_api": bool(settings.greysheet_api_key and settings.greysheet_api_token),
     }
 
 

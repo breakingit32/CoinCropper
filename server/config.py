@@ -39,6 +39,8 @@ class Settings:
     pcgs_api_tokens: tuple = tuple(t for t in re.split(r"[\s,]+", os.getenv("PCGS_API_TOKEN", "")) if t)
     cacg_api_key: str = os.getenv("CACG_API_KEY", "")
     cacg_api_token: str = os.getenv("CACG_API_TOKEN", "")
+    greysheet_api_key: str = os.getenv("GREYSHEET_API_KEY", "")
+    greysheet_api_token: str = os.getenv("GREYSHEET_API_TOKEN", "")
     cache_seconds: int = int(os.getenv("CACHE_SECONDS", "600"))
 
 

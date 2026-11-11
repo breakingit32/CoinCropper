@@ -2,7 +2,7 @@
 
 import { makeDeviceBackend } from "./device.js";
 import { readSlabs, slabFromBarcode } from "./slab.js";
-import { parseKeysFile } from "./grading.js";
+import { greyValue, parseKeysFile } from "./grading.js";
 import { SceneMap } from "./scene.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
@@ -28,7 +28,7 @@ let nativeCam = false;      // Android app: Google ML Kit scanner draws the came
 // Android app: lookups run on the phone (device.js signs in to CCE directly),
 // unless a server address is set in Settings.
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
-const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "ngcToken", "serverUrl"];
+const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "serverUrl"];
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
 }
@@ -456,15 +456,23 @@ function renderTags() {
     t.el.classList.toggle("error", coin.status === "error");
     const t1 = card.firstChild, t2 = card.lastChild;
     const high = coin.result?.bids?.high_bid, guide = coin.result?.grading?.price_guide;
+    const grey = greyValue(coin.result?.greysheet);
     const cac = coin.result?.grading?.cac;
     t1.textContent = coinTitle(coin);
     t1.classList.toggle("cac-green", cac === "Green");
     t1.classList.toggle("cac-gold", cac === "Gold");
-    t2.classList.toggle("none", coin.status === "ok" && high == null && guide == null);
-    t2.classList.toggle("guide", high == null && guide != null);
-    t2.textContent = coin.status === "loading" ? "Looking up…" :
-      coin.status === "error" ? (guide != null ? `Guide ${money(guide)}` : "Lookup failed") :
-      high != null ? `Bid ${money(high)}` : guide != null ? `Guide ${money(guide)}` : "No bids";
+    // CCE bid first, then Greysheet, then the PCGS guide.
+    const fallback = grey != null ? `Grey ${money(grey)}` : guide != null ? `Guide ${money(guide)}` : null;
+    t2.classList.toggle("none", coin.status === "ok" && high == null && fallback == null);
+    t2.classList.toggle("guide", high == null && fallback != null);
+    const label = coin.status === "loading" ? "Looking up…" :
+      coin.status === "error" ? (fallback || "Lookup failed") :
+      high != null ? `Bid ${money(high)}` : fallback || "No bids";
+    const extra = coin.status !== "loading" && high != null && grey != null ? ` · Grey ${money(grey)}` : "";
+    if (t2.dataset.v !== label + extra) {
+      t2.dataset.v = label + extra;
+      t2.innerHTML = esc(label) + (extra ? `<small class="sub">${esc(extra)}</small>` : "");
+    }
   }
 }
 
@@ -510,10 +518,22 @@ function renderSheet() {
   $("verifyLink").hidden = !res.verify_url;
   if (res.verify_url) $("verifyLink").href = res.verify_url;
   renderGrading(res.grading);
+  renderGreysheet(res.greysheet);
   const notes = [...(c.notes || []), coin.code ? `Barcode: ${coin.code}` : "Read from label text"];
   if (b.source === "mock") notes.unshift(NATIVE ? "Demo prices — add your CCE account in Settings for live bids."
     : "Demo prices — connect your CCE account on the server for live bids.");
   $("dNotes").textContent = notes.join(" · ");
+}
+
+function renderGreysheet(g) {
+  $("greyBox").hidden = !g;
+  if (!g) return;
+  $("gsGrey").textContent = money(g.grey);
+  $("gsGreyCac").textContent = money(g.grey_cac);
+  $("gsCpg").textContent = money(g.cpg);
+  $("gsMeta").textContent = g.none ? `No Greysheet price for grade ${g.grade}`
+    : [g.name, g.grade_label, g.tier === "basic" && "retail only (basic API tier)", g.cac && g.grey_cac && "CAC price used"]
+      .filter(Boolean).join(" · ");
 }
 
 function renderGrading(g) {
@@ -538,6 +558,7 @@ function renderGrading(g) {
 
 // Value used for the case total: the CCE high bid, else the PCGS price guide.
 const coinValue = (c) => c.result?.bids?.high_bid ?? null;
+const greyOf = (c) => greyValue(c.result?.greysheet);
 const guideValue = (c) => c.result?.grading?.price_guide ?? null;
 
 // Past scans are kept on the phone so coins aren't looked up again next time.
@@ -565,14 +586,16 @@ function updateCase() {
   const list = [...coins.entries()];
   const total = list.reduce((s, [, c]) => s + (coinValue(c) || 0), 0);
   const guide = list.reduce((s, [, c]) => s + (guideValue(c) || 0), 0);
+  const greyT = list.reduce((s, [, c]) => s + (greyOf(c) || 0), 0);
   $("caseCount").textContent = list.length;
-  $("caseTotal").textContent = money(total || guide);
+  $("caseTotal").textContent = money(total || greyT || guide);
   const session = list.filter(([, c]) => !c.saved || (c.lastSeen && c.lastSeen > startedAt)).length;
   $("caseSub").textContent = `${list.length} coins (${session} seen now) · total high bid ${money(total)}` +
-    (guide ? ` · PCGS guide ${money(guide)}` : "");
+    (greyT ? ` · Greysheet ${money(greyT)}` : "") + (guide ? ` · PCGS guide ${money(guide)}` : "");
   $("caseList").innerHTML = list.map(([key, c]) => `<li data-code="${esc(key)}">
       <span>${esc(coinTitle(c))}${c.result?.grading?.cac ? ` <small class="cac-${esc(c.result.grading.cac.toLowerCase())}">CAC</small>` : ""}</span>
-      <span class="p">${esc(coinValue(c) != null ? money(coinValue(c)) : guideValue(c) != null ? "Guide " + money(guideValue(c)) : "—")}</span></li>`).join("");
+      <span class="p">${esc(coinValue(c) != null ? money(coinValue(c)) : greyOf(c) != null ? "Grey " + money(greyOf(c))
+        : guideValue(c) != null ? "Guide " + money(guideValue(c)) : "—")}</span></li>`).join("");
 }
 
 // ---------------------------------------------------------------- OCR
@@ -687,10 +710,10 @@ $("clearBtn").onclick = () => {
   updateCase();
 };
 $("exportBtn").onclick = async () => {
-  const rows = [["service", "cert", "pcgs_no", "grade", "description", "cac", "high_bid", "low_ask", "pcgs_guide"]];
+  const rows = [["service", "cert", "pcgs_no", "grade", "description", "cac", "high_bid", "low_ask", "greysheet", "cpg_retail", "pcgs_guide"]];
   for (const c of coins.values()) {
-    const k = c.result?.coin || {}, b = c.result?.bids || {}, g = c.result?.grading || {};
-    rows.push([k.service, k.cert, k.pcgs_no, k.grade, k.description, g.cac, b.high_bid, b.low_ask, g.price_guide]);
+    const k = c.result?.coin || {}, b = c.result?.bids || {}, g = c.result?.grading || {}, gs = c.result?.greysheet || {};
+    rows.push([k.service, k.cert, k.pcgs_no, k.grade, k.description, g.cac, b.high_bid, b.low_ask, greyValue(gs), gs.cpg, g.price_guide]);
   }
   const csv = rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   try { await navigator.clipboard.writeText(csv); $("exportBtn").textContent = "Copied!"; }
@@ -772,6 +795,8 @@ $("keysFile").onchange = async (e) => {
     if (k.cacgKey) { f.cacgKey.value = k.cacgKey; n++; }
     if (k.cacgToken) { f.cacgToken.value = k.cacgToken; n++; }
     if (k.ngcToken) { f.ngcToken.value = k.ngcToken; n++; }
+    if (k.gsKey) { f.gsKey.value = k.gsKey; n++; }
+    if (k.gsToken) { f.gsToken.value = k.gsToken; n++; }
     if (!n) throw new Error("no keys found in that file");
     saveSettings();
     st.textContent = `✓ Imported ${n} key${n > 1 ? "s" : ""} and saved.`;

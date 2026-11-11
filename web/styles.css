@@ -140,3 +140,5 @@ html.native-cam #video { display: none; }
 
 /* Slab placed from the remembered case layout (not read in this frame) */
 .tag.remembered .box.slab { border-style: dashed; border-color: #e8b64c88; background: transparent; }
+
+.tag .t2 small.sub { display: block; font-size: 11px; font-weight: 500; color: #9fd1ff; }

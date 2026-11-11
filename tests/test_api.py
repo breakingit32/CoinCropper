@@ -51,3 +51,23 @@ def test_grading_pcgs_and_cac(monkeypatch):
     assert info["name"] == "1900-O/CC $1" and info["grade"] == "MS64" and info["pcgs_no"] == "7268"
     assert info["price_guide"] == 1750 and info["auctions"][0]["price"] == 1380
     assert info["cac"] == "Green" and notes == []
+
+
+def test_greysheet_price():
+    import asyncio
+    import httpx
+    from server.grading import Greysheet
+
+    def handler(req: httpx.Request):
+        assert req.headers["x-api-key"] == "K" and req.headers["x-api-token"] == "T"
+        assert req.url.params["PcgsNumber"] == "7268" and req.url.params["Grade"] == "64"
+        return httpx.Response(200, json={"PermitAccess": True, "Data": [{"GsId": 1, "Name": "1900-O/CC $1", "PricingData": [
+            {"Grade": 64, "GradeLabel": "MS64", "IsCac": False, "GreyVal": "1,450.00", "CpgVal": "1,850"},
+            {"Grade": 64, "GradeLabel": "MS64", "IsCac": True, "GreyVal": "1,725.00"}]}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as cli:
+            return await Greysheet(cli, "K", "T").price("7268", 64, "Green")
+
+    g = asyncio.run(run())
+    assert g["grey"] == 1450 and g["grey_cac"] == 1725 and g["cpg"] == 1850 and g["tier"] == "advanced"

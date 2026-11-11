@@ -332,6 +332,37 @@ check(gr.calls.filter((c) => c.includes("pcgs") || c.includes("Coin")).some((c) 
 check(gr.n2 === gr.n1 && gr.r2.grading.name === gr.r1.grading.name, "second lookup served from the phone's cache");
 check(gr.kf.pcgs.length === 2 && gr.kf.cacgKey === "k1" && gr.kf.cacgToken === "t1" && gr.kf.ngcToken === "n1", "keys file import");
 
+// 9b. Greysheet (CDN Public API).
+const gsr = await page.evaluate(async () => {
+  const { makeGreysheet, greyValue } = await import("./grading.js");
+  const calls = [];
+  const resp = (grey) => ({ Data: [{ GsId: 123, Name: "1900-O/CC $1", PricingData: [
+    { Grade: 63, GradeLabel: "MS63", IsCac: false, GreyVal: "1,100.00", CpgVal: "1,400" },
+    { Grade: 64, GradeLabel: "MS64", IsCac: false, GreyVal: grey, CpgVal: "1,850.00", PcgsVal: "1,750" },
+    { Grade: 64, GradeLabel: "MS64", IsCac: true, GreyVal: "1,725.00", CpgVal: "2,100" },
+  ] }], PermitAccess: true });
+  const mk = (advancedOk) => makeGreysheet({
+    getKeys: () => ({ gsKey: "K", gsToken: "T" }),
+    storage: (() => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v) }; })(),
+    http: async (o) => {
+      calls.push(o.url + " " + o.headers["x-api-key"] + o.headers["x-api-token"]);
+      if (o.url.includes("ApiLevel=advanced") && !advancedOk) return { status: 200, data: { PermitAccess: false, AccessDeniedMessage: "Advanced API requires Dealer+" } };
+      return { status: 200, data: resp(o.url.includes("ApiLevel=advanced") ? "1,450.00" : "") };
+    },
+  });
+  const g1 = mk(true);
+  const a = await g1.price({ pcgs_no: "7268", grade_num: 64, cac: null });
+  const b = await g1.price({ pcgs_no: "7268", grade_num: 64, cac: "Green" });   // cached; CAC coin
+  const n = calls.length;
+  const c = await mk(false).price({ pcgs_no: "7268", grade_num: 64, cac: null });
+  return { a, b, c, n, first: calls[0], grey: greyValue(a), greyCac: greyValue(b) };
+});
+check(gsr.first.includes("/GetPricingRequest?PcgsNumber=7268&Grade=64&ApiLevel=advanced") && gsr.first.endsWith(" KT"),
+  "Greysheet asked by PCGS # and grade, advanced tier, with key + token");
+check(gsr.grey === 1450 && gsr.a.cpg === 1850 && gsr.a.grey_cac === 1725, `Greysheet MS64: grey ${gsr.grey}, CAC grey ${gsr.a.grey_cac}, CPG ${gsr.a.cpg}`);
+check(gsr.greyCac === 1725 && gsr.n === 1, "CAC coin uses the CAC price; second lookup cached");
+check(gsr.c.tier === "basic" && gsr.c.cpg === 1850 && gsr.c.grey == null, "no advanced access: falls back to basic (retail)");
+
 // 7. {barcode} placeholder sends the full scanned value.
 const urls = await page.evaluate(async () => {
   const { buildSearchUrl, parseBarcode } = await import("./core.js");

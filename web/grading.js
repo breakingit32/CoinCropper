@@ -202,8 +202,86 @@ export function parseKeysFile(text) {
     const j = JSON.parse(t);
     const pcgs = [].concat(j.pcgs || j.pcgs_tokens || j.PCGS || []).map(String).map((s) => s.trim()).filter(Boolean);
     return { pcgs: pcgs.length ? pcgs : undefined, cacgKey: j.cacg_key || j.cacgKey,
-      cacgToken: j.cacg_token || j.cacgToken || j.cac_token, ngcToken: j.ngc_token || j.ngcToken };
+      cacgToken: j.cacg_token || j.cacgToken || j.cac_token, ngcToken: j.ngc_token || j.ngcToken,
+      gsKey: j.greysheet_key || j.gs_key || j.gsKey, gsToken: j.greysheet_token || j.gs_token || j.gsToken };
   } catch { /* plain text: one PCGS key per line */ }
   const pcgs = t.split(/\s+/).filter((s) => s.length > 60);
   return { pcgs: pcgs.length ? pcgs : undefined };
 }
+
+// ------------------------------------------------------------- Greysheet (CDN Public API)
+//
+// GET https://cpgpublicapiv2.greysheet.com/api/GetPricingRequest?PcgsNumber=7268&Grade=64&ApiLevel=advanced
+// headers x-api-token / x-api-key.  Returns per-grade prices: GreyVal (Greysheet
+// wholesale, advanced tier), CpgVal (retail), PcgsVal, NgcVal, BlueBookVal,
+// with separate rows for CAC (IsCac).
+
+export const GREYSHEET = "https://cpgpublicapiv2.greysheet.com/api";
+const GS_CACHE_DAYS = 1;
+
+const gsMoney = (v) => {
+  const m = /([0-9][0-9,]*(?:\.\d+)?)/.exec(String(v ?? ""));
+  const n = m ? parseFloat(m[1].replace(/,/g, "")) : NaN;
+  return n > 0 ? n : null;
+};
+
+// Pick this grade's rows out of a GetPricingResponse.
+export function greysheetFromResponse(data, gradeNum, cac) {
+  const sets = data?.Data || [];
+  const set = sets[0];
+  if (!set) return null;
+  const rows = (set.PricingData || []).filter((r) => +r.Grade === +gradeNum);
+  if (!rows.length) return { gsid: set.GsId, name: set.Name, grade: gradeNum, none: true };
+  const plain = rows.find((r) => !r.IsCac) || rows[0];
+  const withCac = rows.find((r) => r.IsCac) || null;
+  return {
+    gsid: set.GsId, name: set.Name, grade: gradeNum, grade_label: plain.GradeLabel || null,
+    grey: gsMoney(plain.GreyVal), cpg: gsMoney(plain.CpgVal), pcgs: gsMoney(plain.PcgsVal),
+    ngc: gsMoney(plain.NgcVal), bluebook: gsMoney(plain.BlueBookVal),
+    grey_cac: withCac ? gsMoney(withCac.GreyVal) : null, cpg_cac: withCac ? gsMoney(withCac.CpgVal) : null,
+    cac: !!cac,
+  };
+}
+
+export function makeGreysheet({ http, getKeys, storage = globalThis.localStorage }) {
+  const get = (k) => { try { const e = JSON.parse(storage?.getItem("gs:" + k) || "null"); return e && Date.now() - e.t < GS_CACHE_DAYS * 864e5 ? e : null; } catch { return null; } };
+  const set = (k, v) => { try { storage?.setItem("gs:" + k, JSON.stringify({ t: Date.now(), v })); } catch { /* full */ } };
+
+  async function call(params, advanced) {
+    const { gsKey, gsToken } = getKeys();
+    const q = new URLSearchParams({ ...params, ...(advanced ? { ApiLevel: "advanced" } : {}) });
+    const r = await http({
+      url: `${GREYSHEET}/GetPricingRequest?${q}`, method: "GET", responseType: "json",
+      headers: { "x-api-token": gsToken, "x-api-key": gsKey, Accept: "application/json" },
+    });
+    const data = typeof r.data === "string" ? JSON.parse(r.data || "null") : r.data;
+    const denied = r.status === 401 || r.status === 403 || data?.PermitAccess === false;
+    if (denied) return { denied: data?.AccessDeniedMessage || data?.ResponseStatus?.Message || `HTTP ${r.status}` };
+    if (r.status !== 200) throw new Error(`Greysheet HTTP ${r.status}`);
+    if (data?.ErrorText) throw new Error(`Greysheet: ${data.ErrorText}`);
+    return { data };
+  }
+
+  return {
+    configured() { const k = getKeys(); return !!(k.gsKey && k.gsToken); },
+    // {pcgs_no, grade_num, cac} -> prices for that grade, or null
+    async price({ pcgs_no, grade_num, cac }) {
+      if (!this.configured() || !pcgs_no || !grade_num) return null;
+      const key = `${pcgs_no}:${grade_num}`;
+      const hit = get(key);
+      if (hit) return hit.v && { ...hit.v, cac: !!cac };
+      const params = { PcgsNumber: String(pcgs_no), Grade: String(grade_num) };
+      let r = await call(params, true);
+      let tier = "advanced";
+      if (r.denied) { r = await call(params, false); tier = "basic"; }   // no advanced access: retail only
+      if (r.denied) throw new Error(`Greysheet refused the key: ${r.denied}`);
+      const g = greysheetFromResponse(r.data, grade_num, cac);
+      if (g) g.tier = tier;
+      set(key, g);
+      return g;
+    },
+  };
+}
+
+// Greysheet value for this coin: the CAC price for CAC coins when there is one.
+export const greyValue = (g) => (g ? (g.cac && g.grey_cac) || g.grey || null : null);

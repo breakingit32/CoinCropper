@@ -82,6 +82,16 @@
       </form>
     </details>
 
+    <section id="greyBox" class="grading" hidden>
+      <div class="g-title">Greysheet</div>
+      <div id="gsMeta" class="muted"></div>
+      <div class="stats">
+        <div><span>Greysheet</span><b id="gsGrey">—</b></div>
+        <div><span>CAC Grey</span><b id="gsGreyCac">—</b></div>
+        <div><span>CPG retail</span><b id="gsCpg">—</b></div>
+      </div>
+    </section>
+
     <section id="gradingBox" class="grading" hidden>
       <div class="g-head">
         <img id="gImg" alt="" hidden>
@@ -156,6 +166,11 @@
       </label>
       <label>CAC / CACG API key <input name="cacgKey" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
       <label>CAC / CACG API token <input name="cacgToken" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <label>Greysheet API key <input name="gsKey" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <label>Greysheet API token
+        <input name="gsToken" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <small>CDN Public API: Greysheet wholesale value for the coin's PCGS # and grade (CAC price for CAC coins).</small>
+      </label>
       <label>NGC dealer API token
         <input name="ngcToken" autocapitalize="off" autocorrect="off" spellcheck="false">
         <small>Saved for NGC lookups (not used yet).</small>

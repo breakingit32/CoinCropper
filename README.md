@@ -85,7 +85,7 @@ because browsers won't let one site read another site's pages.)
 
 ```json
 { "cceUser": "…", "ccePass": "…", "pcgsTokens": ["key1", "key2"],
-  "cacgKey": "…", "cacgToken": "…", "ngcToken": "…" }
+  "cacgKey": "…", "cacgToken": "…", "gsKey": "…", "gsToken": "…", "ngcToken": "…" }
 ```
 
 `npm run apk` writes them into the APK (`builtin.local.js`), so the app starts
@@ -167,6 +167,11 @@ from its barcode or the cert number read off the label:
   Old 7-digit certs are padded to 8 digits automatically.
 * **CAC** (`api.cacgrading.com`): CAC sticker (Green/Gold) on PCGS and NGC
   coins, and CACG's own certs.
+* **Greysheet** (CDN Public API, `cpgpublicapiv2.greysheet.com`): Greysheet
+  wholesale value for the coin's PCGS # and grade (the CAC price for CAC
+  coins), plus CPG retail. Uses the Advanced tier (`ApiLevel=advanced`) and
+  falls back to Basic (retail only) if the key doesn't have it. Cards show
+  the CCE bid, else Greysheet, else the PCGS guide.
 * **NGC**: the dealer API token can be stored but isn't used yet.
 
 Results are cached for a week (on the phone in the Android app), so a case
@@ -175,7 +180,8 @@ costs each lookup once. When CCE has no bid, cards show the PCGS guide value.
 * **Android app:** ⚙ → *Grading APIs* → **Import keys file…** (JSON:
   `{"pcgs": ["key1", "key2"], "cacg_key": "…", "cacg_token": "…", "ngc_token": "…"}`)
   or paste them in. Keys are stored only on the phone.
-* **Server:** `PCGS_API_TOKEN=key1,key2,…`, `CACG_API_KEY`, `CACG_API_TOKEN`.
+* **Server:** `PCGS_API_TOKEN=key1,key2,…`, `CACG_API_KEY`, `CACG_API_TOKEN`,
+  `GREYSHEET_API_KEY`, `GREYSHEET_API_TOKEN`.
 
 Never commit keys to the repository.
 

@@ -3,7 +3,7 @@
 // subject to browser CORS rules and shares the app's cookie store, so the CCE
 // login session lives on the phone like it would in Chrome.
 
-import { coinFromGrading, makeGrading } from "./grading.js";
+import { coinFromGrading, makeGrading, makeGreysheet } from "./grading.js";
 import {
   buildSearchUrl, emptyCoin, merge, mockBids, normaliseGrade,
   parseBarcode, parseLabelText, parseMarketGrid, parseQuotes, quotesForGrade, summarise,
@@ -141,7 +141,8 @@ export class CCEDirect {
 // Settings -> API keys. pcgsTokens holds one key per line.
 export function gradingKeys(s) {
   const pcgs = String(s.pcgsTokens || "").split(/\s+/).concat(s.pcgsToken || "").map((x) => x.trim()).filter(Boolean);
-  return { pcgs: [...new Set(pcgs)], cacgKey: s.cacgKey || "", cacgToken: s.cacgToken || "", ngcToken: s.ngcToken || "" };
+  return { pcgs: [...new Set(pcgs)], cacgKey: s.cacgKey || "", cacgToken: s.cacgToken || "", ngcToken: s.ngcToken || "",
+    gsKey: s.gsKey || "", gsToken: s.gsToken || "" };
 }
 
 // High bid for the coin's own grading service (and not a type-coin bid) when there is one.
@@ -157,6 +158,7 @@ export function makeDeviceBackend(getSettings) {
   let client = null, clientKey = "";
   const cache = new Map();
   const grading = makeGrading({ http, getKeys: () => gradingKeys(getSettings()) });
+  const greysheet = makeGreysheet({ http, getKeys: () => gradingKeys(getSettings()) });
 
   function cce() {
     const s = getSettings();
@@ -216,7 +218,10 @@ export function makeDeviceBackend(getSettings) {
           catch (e) { bids = summarise("cce", [], null, e.message || String(e)); }
         }
       }
-      return { coin, bids, grading: g, verify_url: verifyUrl(coin), cce_url: bids.url || CCE_BASE };
+      let grey = null;
+      try { grey = await greysheet.price({ pcgs_no: coin.pcgs_no, grade_num: coin.grade_num, cac: g?.cac }); }
+      catch (e) { coin.notes.push(e.message); }
+      return { coin, bids, grading: g, greysheet: grey, verify_url: verifyUrl(coin), cce_url: bids.url || CCE_BASE };
     },
   };
 }
