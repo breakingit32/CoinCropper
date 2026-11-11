@@ -81,7 +81,24 @@
       </form>
     </details>
 
+    <section id="gradingBox" class="grading" hidden>
+      <div class="g-head">
+        <img id="gImg" alt="" hidden>
+        <div>
+          <div id="gTitle" class="g-title"></div>
+          <div id="gMeta" class="muted"></div>
+        </div>
+      </div>
+      <div class="stats">
+        <div><span>PCGS guide</span><b id="gGuide">—</b></div>
+        <div><span>Pop / higher</span><b id="gPop">—</b></div>
+        <div><span>CAC</span><b id="gCac">—</b></div>
+      </div>
+      <table class="quotes" id="gAuctions"><thead><tr><th>Sold</th><th>Price</th><th>Auction</th></tr></thead><tbody></tbody></table>
+    </section>
+
     <div class="links">
+      <a id="coinfactsLink" target="_blank" rel="noopener" hidden>CoinFacts ↗</a>
       <a id="cceLink" target="_blank" rel="noopener">Open on CCE ↗</a>
       <a id="verifyLink" target="_blank" rel="noopener">Verify cert ↗</a>
     </div>
@@ -121,10 +138,22 @@
         <small>The CCE page that lists bids for one coin. Put <b>{barcode}</b> where the scanned
           barcode goes (or {cert}, {pcgs_no}, {grade_num}, {grade}, {service}, {query}).</small>
       </label>
-      <h3>PCGS (optional)</h3>
-      <label>PCGS API token
-        <input name="pcgsToken" autocapitalize="off" autocorrect="off" spellcheck="false">
-        <small>Turns a PCGS cert number into the coin and grade. Free at pcgs.com/publicapi.</small>
+      <h3>Grading APIs</h3>
+      <p class="muted">Identify each slab from the grading service's own record: coin, grade,
+        PCGS #, price guide, population, auction history and CAC sticker.</p>
+      <div class="row">
+        <button type="button" id="importKeys">Import keys file…</button>
+        <input type="file" id="keysFile" accept=".json,.txt,application/json,text/plain" hidden>
+      </div>
+      <label>PCGS API keys (one per line)
+        <textarea name="pcgsTokens" rows="3" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+        <small>When one key reaches its daily limit the next is used.</small>
+      </label>
+      <label>CAC / CACG API key <input name="cacgKey" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <label>CAC / CACG API token <input name="cacgToken" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+      <label>NGC dealer API token
+        <input name="ngcToken" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <small>Saved for NGC lookups (not used yet).</small>
       </label>
       <details>
         <summary>Advanced</summary>

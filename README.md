@@ -133,19 +133,28 @@ page's HTML and adjust `server/cce.py → parse_quotes`.
 Please use this in line with your CCE membership terms. Results are cached for
 10 minutes (`CACHE_SECONDS`) so a case of coins doesn't hammer the site.
 
-### Identifying coins from the cert number (recommended)
+### Grading APIs: identify coins from the cert (recommended)
 
-A slab barcode only holds the **cert number**. CCE looks coins up by
-**PCGS # + grade**, so for PCGS slabs set a free
-[PCGS public API](https://www.pcgs.com/publicapi) token:
+With API keys, each slab is looked up in the grading service's own records
+from its barcode or the cert number read off the label:
 
-```ini
-PCGS_API_TOKEN=...
-```
+* **PCGS** (`api.pcgs.com`): coin, grade, PCGS #, PCGS price guide,
+  population, and that coin's own auction history. Several keys can be
+  given; when one is refused or reaches its daily limit the next is used.
+  Old 7-digit certs are padded to 8 digits automatically.
+* **CAC** (`api.cacgrading.com`): CAC sticker (Green/Gold) on PCGS and NGC
+  coins, and CACG's own certs.
+* **NGC**: the dealer API token can be stored but isn't used yet.
 
-The server then turns each cert into the coin name, PCGS # and grade
-automatically. For NGC and others, the app uses what it can read from the
-label (OCR) plus anything you type in **Fix coin details**.
+Results are cached for a week (on the phone in the Android app), so a case
+costs each lookup once. When CCE has no bid, cards show the PCGS guide value.
+
+* **Android app:** ⚙ → *Grading APIs* → **Import keys file…** (JSON:
+  `{"pcgs": ["key1", "key2"], "cacg_key": "…", "cacg_token": "…", "ngc_token": "…"}`)
+  or paste them in. Keys are stored only on the phone.
+* **Server:** `PCGS_API_TOKEN=key1,key2,…`, `CACG_API_KEY`, `CACG_API_TOKEN`.
+
+Never commit keys to the repository.
 
 ## Development
 
@@ -156,8 +165,9 @@ node tests/js/device.test.mjs   # app's on-device mode (needs Playwright)
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)
-* `server/pcgs.py`: PCGS cert lookup
+* `server/grading.py`, `web/grading.js`: PCGS and CAC API lookups
 * `server/cce.py`: CCE login, bid-table parser, demo data
+* `web/slab.js`: label layout model (finds each slab's rectangle and fields)
 * `server/main.py`: FastAPI app, serves `web/` and `/api/*`
 * `web/`: the phone app (plain HTML/JS, no build step); `web/core.js` and
   `web/device.js` are the on-device copies of the server logic used by the APK

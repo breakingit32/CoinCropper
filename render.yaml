@@ -17,3 +17,7 @@ services:
         sync: false
       - key: PCGS_API_TOKEN
         sync: false
+      - key: CACG_API_KEY
+        sync: false
+      - key: CACG_API_TOKEN
+        sync: false

@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import pcgs
+from .grading import Grading, coin_from_grading
 from .cce import BidResult, CCEClient, CCEError, mock_bids
 from .config import settings
 from .labels import SlabInfo, normalise_grade, parse_barcode, parse_label_text
@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI):
         settings.cce_search_url,
     ) if settings.cce_mode == "live" else None
     state["cache"] = {}
+    state["grading"] = Grading(state["http"], list(settings.pcgs_api_tokens),
+                               settings.cacg_api_key, settings.cacg_api_token)
     yield
     await state["http"].aclose()
     if state["cce"]:
@@ -64,7 +66,7 @@ class LookupRequest(BaseModel):
     description: Optional[str] = None
 
 
-async def identify(req: LookupRequest) -> SlabInfo:
+async def identify(req: LookupRequest) -> tuple[SlabInfo, Optional[dict]]:
     manual = SlabInfo(
         service=req.service or None, cert=req.cert or None,
         pcgs_no=req.pcgs_no or None, description=req.description or None,
@@ -74,20 +76,21 @@ async def identify(req: LookupRequest) -> SlabInfo:
         if not manual.grade:
             manual.notes.append(f"grade '{req.grade}' not understood")
 
-    coin = manual.merge(parse_barcode(req.code))
-    if req.ocr_text:
-        coin.merge(parse_label_text(req.ocr_text))
-
-    if coin.service == "PCGS" and coin.cert and settings.pcgs_api_token:
-        try:
-            found = await pcgs.lookup_cert(state["http"], settings.pcgs_api_token, coin.cert)
-        except httpx.HTTPError as e:
-            found = None
-            coin.notes.append(f"PCGS lookup failed: {e.__class__.__name__}")
-        if found:
-            coin.merge(found)
-            coin.notes.append("identified via PCGS cert lookup")
-    return coin
+    # What the camera saw; the label's cert line beats a guessed barcode format.
+    from_barcode = parse_barcode(req.code)
+    detected = parse_label_text(req.ocr_text).merge(from_barcode) if req.ocr_text else from_barcode
+    detected.raw = from_barcode.raw
+    # The grading service's record wins over the camera; manual edits win over all.
+    probe = SlabInfo(raw=detected.raw, service=manual.service or detected.service, cert=manual.cert or detected.cert)
+    g, notes = await state["grading"].identify(probe)
+    coin = manual
+    if g:
+        coin.merge(coin_from_grading(g))
+        if g.get("name"):
+            coin.notes.append(f"identified by {g['service']} cert lookup")
+    coin.merge(detected)
+    coin.notes.extend(notes)
+    return coin, g
 
 
 async def get_bids(coin: SlabInfo) -> BidResult:
@@ -117,11 +120,12 @@ def verify_url(coin: SlabInfo) -> Optional[str]:
 
 @app.post("/api/lookup")
 async def lookup(req: LookupRequest) -> dict:
-    coin = await identify(req)
+    coin, g = await identify(req)
     bids = await get_bids(coin)
     return {
         "coin": coin.to_dict(),
         "bids": bids.to_dict(),
+        "grading": g,
         "verify_url": verify_url(coin),
         "cce_url": bids.url or settings.cce_base_url,
     }
@@ -132,7 +136,8 @@ async def status() -> dict:
     return {
         "cce_mode": "live" if state.get("cce") else "mock",
         "cce_configured": bool(settings.cce_user_id and settings.cce_search_url),
-        "pcgs_api": bool(settings.pcgs_api_token),
+        "pcgs_api": bool(settings.pcgs_api_tokens),
+        "cac_api": bool(settings.cacg_api_key and settings.cacg_api_token),
     }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,9 +34,11 @@ class Settings:
     # Member-area page that lists bids for one coin.  Placeholders:
     # {pcgs_no} {grade} {grade_num} {service} {cert} {barcode} {query}
     cce_search_url: str = os.getenv("CCE_SEARCH_URL", "")
-    # Optional PCGS public API token (free at pcgs.com/publicapi) used to turn a
-    # cert number into the coin's PCGS number, name and grade.
-    pcgs_api_token: str = os.getenv("PCGS_API_TOKEN", "")
+    # Grading APIs (optional). PCGS_API_TOKEN may hold several keys separated by
+    # commas/spaces; they rotate when one hits its daily limit.
+    pcgs_api_tokens: tuple = tuple(t for t in re.split(r"[\s,]+", os.getenv("PCGS_API_TOKEN", "")) if t)
+    cacg_api_key: str = os.getenv("CACG_API_KEY", "")
+    cacg_api_token: str = os.getenv("CACG_API_TOKEN", "")
     cache_seconds: int = int(os.getenv("CACHE_SECONDS", "600"))
 
 

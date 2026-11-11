@@ -206,6 +206,42 @@ const rot = await page.evaluate(async () => {
 });
 check(Math.abs(rot.slabs[0].slab.angle - 0.2) < 0.01 && rot.slabs[0].fields.denomination === "S$1", "tilted slab: angle and fields");
 
+// 9. Grading APIs: PCGS (key rotation, cert padding, caching) and CAC stickers.
+const fixture = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../fixtures/pcgs_cert_02401136.json"), "utf8"));
+const gr = await page.evaluate(async (fixture) => {
+  const { makeGrading, parseKeysFile } = await import("./grading.js");
+  const calls = [];
+  const http = async (o) => {
+    calls.push(o.url.replace(/^https:\/\/[^/]+/, "") + " " + (o.headers.Authorization || o.headers["X-API-KEY"] || "").slice(-6));
+    if (o.url.includes("pcgs.com")) {
+      if (o.headers.Authorization === "bearer BADKEY_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+        return { status: 401, data: { Message: "Authorization has been denied for this request." } };
+      if (o.url.endsWith("/GetCoinFactsByCertNo/02401136")) return { status: 200, data: fixture };
+      return { status: 200, data: { IsValidRequest: true, ServerMessage: "No data found" } };
+    }
+    if (o.url.includes("stickered_certs?certId=02401136")) return { status: 200, data: { data: [{ certId: "02401136", status: "Gold" }] } };
+    if (o.url.includes("stickered_certs")) return { status: 200, data: { data: [] } };
+    return { status: 404, data: {} };
+  };
+  const store = new Map();
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  const keys = { pcgs: ["BADKEY_" + "x".repeat(58), "GOODKEY_" + "y".repeat(57)], cacgKey: "K", cacgToken: "T" };
+  const g = makeGrading({ http, getKeys: () => keys, storage });
+  const r1 = await g.identify({ service: "PCGS", cert: "2401136", raw: "" });
+  const n1 = calls.length;
+  const r2 = await g.identify({ service: "PCGS", cert: "2401136", raw: "" });
+  const kf = parseKeysFile(JSON.stringify({ pcgs: ["a".repeat(70), "b".repeat(70)], cacg_key: "k1", cacg_token: "t1", ngc_token: "n1" }));
+  return { r1, r2, calls, n1, n2: calls.length, kf };
+}, fixture);
+check(gr.r1.grading?.name === "1900-O/CC $1" && gr.r1.grading.grade === "MS64" && gr.r1.grading.pcgs_no === "7268",
+  `PCGS identifies cert 2401136 (${gr.r1.grading?.name} ${gr.r1.grading?.grade})`);
+check(gr.r1.grading.price_guide === 1750 && gr.r1.grading.auctions[0].price === 1380, "price guide and auction history");
+check(gr.r1.grading.cac === "Gold", "CAC sticker added");
+check(gr.calls.some((c) => c.includes("02401136")), "7-digit cert padded to 8 digits");
+check(gr.calls.filter((c) => c.includes("pcgs") || c.includes("Coin")).some((c) => c.endsWith("yyyyyy")), "bad PCGS key skipped, next key used");
+check(gr.n2 === gr.n1 && gr.r2.grading.name === gr.r1.grading.name, "second lookup served from the phone's cache");
+check(gr.kf.pcgs.length === 2 && gr.kf.cacgKey === "k1" && gr.kf.cacgToken === "t1" && gr.kf.ngcToken === "n1", "keys file import");
+
 // 7. {barcode} placeholder sends the full scanned value.
 const urls = await page.evaluate(async () => {
   const { buildSearchUrl, parseBarcode } = await import("./core.js");

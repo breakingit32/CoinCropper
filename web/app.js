@@ -2,6 +2,7 @@
 
 import { makeDeviceBackend } from "./device.js";
 import { readSlabs, slabFromBarcode } from "./slab.js";
+import { parseKeysFile } from "./grading.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
@@ -26,7 +27,7 @@ let nativeCam = false;      // Android app: Google ML Kit scanner draws the came
 // Android app: lookups run on the phone (device.js signs in to CCE directly),
 // unless a server address is set in Settings.
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
-const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsToken", "serverUrl"];
+const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "ngcToken", "serverUrl"];
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
 }
@@ -407,12 +408,16 @@ function renderTags() {
     t.el.classList.toggle("loading", coin.status === "loading");
     t.el.classList.toggle("error", coin.status === "error");
     const t1 = card.firstChild, t2 = card.lastChild;
-    const high = coin.result?.bids?.high_bid;
+    const high = coin.result?.bids?.high_bid, guide = coin.result?.grading?.price_guide;
+    const cac = coin.result?.grading?.cac;
     t1.textContent = coinTitle(coin);
-    t2.classList.toggle("none", coin.status === "ok" && high == null);
+    t1.classList.toggle("cac-green", cac === "Green");
+    t1.classList.toggle("cac-gold", cac === "Gold");
+    t2.classList.toggle("none", coin.status === "ok" && high == null && guide == null);
+    t2.classList.toggle("guide", high == null && guide != null);
     t2.textContent = coin.status === "loading" ? "Looking up…" :
-      coin.status === "error" ? "Lookup failed" :
-      high != null ? `Bid ${money(high)}` : "No bids";
+      coin.status === "error" ? (guide != null ? `Guide ${money(guide)}` : "Lookup failed") :
+      high != null ? `Bid ${money(high)}` : guide != null ? `Guide ${money(guide)}` : "No bids";
   }
 }
 
@@ -455,19 +460,48 @@ function renderSheet() {
   $("cceLink").href = res.cce_url || "https://www.certifiedcoinexchange.com";
   $("verifyLink").hidden = !res.verify_url;
   if (res.verify_url) $("verifyLink").href = res.verify_url;
+  renderGrading(res.grading);
   const notes = [...(c.notes || []), coin.code ? `Barcode: ${coin.code}` : "Read from label text"];
-  if (b.source === "mock") notes.unshift("Demo prices — connect your CCE account on the server for live bids.");
+  if (b.source === "mock") notes.unshift(NATIVE ? "Demo prices — add your CCE account in Settings for live bids."
+    : "Demo prices — connect your CCE account on the server for live bids.");
   $("dNotes").textContent = notes.join(" · ");
 }
 
+function renderGrading(g) {
+  $("gradingBox").hidden = !g;
+  $("coinfactsLink").hidden = !g?.coinfacts_url;
+  if (!g) return;
+  if (g.coinfacts_url) $("coinfactsLink").href = g.coinfacts_url;
+  $("gImg").hidden = !g.image;
+  if (g.image) $("gImg").src = g.image;
+  $("gTitle").textContent = [g.name, g.grade].filter(Boolean).join(" · ") || `${g.service} ${g.cert}`;
+  $("gMeta").textContent = [`${g.service} cert ${g.cert}`, g.pcgs_no && `PCGS# ${g.pcgs_no}`, g.variety].filter(Boolean).join(" · ");
+  $("gGuide").textContent = money(g.price_guide);
+  $("gPop").textContent = g.population != null ? `${g.population} / ${g.pop_higher ?? "—"}` : "—";
+  $("gCac").textContent = g.cac || "No";
+  $("gCac").className = g.cac ? "cac-" + g.cac.toLowerCase() : "";
+  const rows = (g.auctions || []).map((a) => `<tr><td>${esc(a.date || "")}</td>
+      <td class="bid">${esc(money(a.price))}${a.cac ? " <small>CAC</small>" : ""}</td>
+      <td>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.auctioneer || "lot")}</a>` : esc(a.auctioneer || "")}</td></tr>`);
+  $("gAuctions").hidden = !rows.length;
+  $("gAuctions").tBodies[0].innerHTML = rows.join("");
+}
+
+// Value used for the case total: the CCE high bid, else the PCGS price guide.
+const coinValue = (c) => c.result?.bids?.high_bid ?? null;
+const guideValue = (c) => c.result?.grading?.price_guide ?? null;
+
 function updateCase() {
-  const list = [...coins.values()];
-  const total = list.reduce((s, c) => s + (c.result?.bids?.high_bid || 0), 0);
+  const list = [...coins.entries()];
+  const total = list.reduce((s, [, c]) => s + (coinValue(c) || 0), 0);
+  const guide = list.reduce((s, [, c]) => s + (guideValue(c) || 0), 0);
   $("caseCount").textContent = list.length;
-  $("caseTotal").textContent = money(total);
-  $("caseSub").textContent = `${list.length} coins · total high bid ${money(total)}`;
-  $("caseList").innerHTML = list.map((c) => `<li data-code="${esc(c.code)}">
-      <span>${esc(coinTitle(c))}</span><span class="p">${esc(money(c.result?.bids?.high_bid))}</span></li>`).join("");
+  $("caseTotal").textContent = money(total || guide);
+  $("caseSub").textContent = `${list.length} coins · total high bid ${money(total)}` +
+    (guide ? ` · PCGS guide ${money(guide)}` : "");
+  $("caseList").innerHTML = list.map(([key, c]) => `<li data-code="${esc(key)}">
+      <span>${esc(coinTitle(c))}${c.result?.grading?.cac ? ` <small class="cac-${esc(c.result.grading.cac.toLowerCase())}">CAC</small>` : ""}</span>
+      <span class="p">${esc(coinValue(c) != null ? money(coinValue(c)) : guideValue(c) != null ? "Guide " + money(guideValue(c)) : "—")}</span></li>`).join("");
 }
 
 // ---------------------------------------------------------------- OCR
@@ -580,10 +614,10 @@ $("clearBtn").onclick = () => {
   updateCase();
 };
 $("exportBtn").onclick = async () => {
-  const rows = [["service", "cert", "pcgs_no", "grade", "description", "high_bid", "low_ask"]];
+  const rows = [["service", "cert", "pcgs_no", "grade", "description", "cac", "high_bid", "low_ask", "pcgs_guide"]];
   for (const c of coins.values()) {
-    const k = c.result?.coin || {}, b = c.result?.bids || {};
-    rows.push([k.service, k.cert, k.pcgs_no, k.grade, k.description, b.high_bid, b.low_ask]);
+    const k = c.result?.coin || {}, b = c.result?.bids || {}, g = c.result?.grading || {};
+    rows.push([k.service, k.cert, k.pcgs_no, k.grade, k.description, g.cac, b.high_bid, b.low_ask, g.price_guide]);
   }
   const csv = rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   try { await navigator.clipboard.writeText(csv); $("exportBtn").textContent = "Copied!"; }
@@ -606,6 +640,7 @@ function checkServer() {
 function openSettings() {
   const f = $("settingsForm").elements;
   for (const k of SETTING_KEYS) f[k].value = store(k) || "";
+  if (!f.pcgsTokens.value && store("pcgsToken")) f.pcgsTokens.value = store("pcgsToken");   // older setting
   $("settingsStatus").textContent = "";
   $("sheet").hidden = true; $("caseSheet").hidden = true; openCode = null;
   $("settingsSheet").hidden = false;
@@ -620,6 +655,7 @@ function saveSettings() {
       f[k].value = v;
     }
     if (k === "cceSearchUrl" && v.startsWith(CCE_HOST)) v = v.slice(CCE_HOST.length);
+    if (k === "pcgsTokens") { v = v.split(/\s+/).filter(Boolean).join("\n"); f[k].value = v; }
     store(k, v);
   }
   // Prices may change with the new settings: look everything up again.
@@ -630,6 +666,22 @@ const CCE_HOST = "https://www.certifiedcoinexchange.com";
 $("settingsBtn").hidden = !NATIVE;
 $("startSettings").hidden = !NATIVE;
 $("settingsBtn").onclick = openSettings;
+$("importKeys").onclick = () => $("keysFile").click();
+$("keysFile").onchange = async (e) => {
+  const st = $("settingsStatus"), f = $("settingsForm").elements;
+  try {
+    const k = parseKeysFile(await e.target.files[0].text());
+    let n = 0;
+    if (k.pcgs) { f.pcgsTokens.value = k.pcgs.join("\n"); n += k.pcgs.length; }
+    if (k.cacgKey) { f.cacgKey.value = k.cacgKey; n++; }
+    if (k.cacgToken) { f.cacgToken.value = k.cacgToken; n++; }
+    if (k.ngcToken) { f.ngcToken.value = k.ngcToken; n++; }
+    if (!n) throw new Error("no keys found in that file");
+    saveSettings();
+    st.textContent = `✓ Imported ${n} key${n > 1 ? "s" : ""} and saved.`;
+  } catch (err) { st.textContent = "✗ " + err.message; }
+  e.target.value = "";
+};
 $("startSettings").onclick = openSettings;
 $("settingsForm").onsubmit = (e) => {
   e.preventDefault(); saveSettings();

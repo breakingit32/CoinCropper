@@ -3,13 +3,13 @@
 // subject to browser CORS rules and shares the app's cookie store, so the CCE
 // login session lives on the phone like it would in Chrome.
 
+import { coinFromGrading, makeGrading } from "./grading.js";
 import {
-  buildSearchUrl, emptyCoin, fromPcgsJson, merge, mockBids, normaliseGrade,
+  buildSearchUrl, emptyCoin, merge, mockBids, normaliseGrade,
   parseBarcode, parseLabelText, parseQuotes, summarise, verifyUrl,
 } from "./core.js";
 
 export const CCE_BASE = "https://www.certifiedcoinexchange.com";
-const PCGS_API = "https://api.pcgs.com/publicapi/coindetail/GetCoinFactsByCertNo/";
 const RELOGIN_MS = 30 * 60 * 1000;
 const CACHE_MS = 10 * 60 * 1000;
 
@@ -63,20 +63,16 @@ export class CCEDirect {
   }
 }
 
-async function pcgsLookup(token, cert) {
-  const r = await http({
-    url: PCGS_API + encodeURIComponent(cert), method: "GET", responseType: "json",
-    headers: { Authorization: `bearer ${token}`, Accept: "application/json" },
-  });
-  if (r.status !== 200) return null;
-  const data = typeof r.data === "string" ? JSON.parse(r.data || "null") : r.data;
-  if (!data || data.IsValidRequest === false) return null;
-  return fromPcgsJson(data, cert);
+// Settings -> API keys. pcgsTokens holds one key per line.
+export function gradingKeys(s) {
+  const pcgs = String(s.pcgsTokens || "").split(/\s+/).concat(s.pcgsToken || "").map((x) => x.trim()).filter(Boolean);
+  return { pcgs: [...new Set(pcgs)], cacgKey: s.cacgKey || "", cacgToken: s.cacgToken || "", ngcToken: s.ngcToken || "" };
 }
 
 export function makeDeviceBackend(getSettings) {
   let client = null, clientKey = "";
   const cache = new Map();
+  const grading = makeGrading({ http, getKeys: () => gradingKeys(getSettings()) });
 
   function cce() {
     const s = getSettings();
@@ -99,16 +95,22 @@ export function makeDeviceBackend(getSettings) {
       [manual.grade, manual.grade_num] = normaliseGrade(req.grade);
       if (!manual.grade) manual.notes.push(`grade '${req.grade}' not understood`);
     }
-    const coin = merge(manual, parseBarcode(req.code));
-    if (req.ocr_text) merge(coin, parseLabelText(req.ocr_text));
-    const token = getSettings().pcgsToken;
-    if (coin.service === "PCGS" && coin.cert && token) {
-      try {
-        const found = await pcgsLookup(token, coin.cert);
-        if (found) { merge(coin, found); coin.notes.push("identified via PCGS cert lookup"); }
-      } catch (e) { coin.notes.push(`PCGS lookup failed: ${e.message}`); }
+    // What the camera saw. The label's cert line beats a guessed barcode format.
+    const fromBarcode = parseBarcode(req.code);
+    const detected = req.ocr_text ? merge(parseLabelText(req.ocr_text), fromBarcode) : fromBarcode;
+    detected.raw = fromBarcode.raw;
+    // The grading service's own record wins over what the camera read;
+    // your manual corrections win over everything.
+    const lookupFor = { ...detected, service: manual.service || detected.service, cert: manual.cert || detected.cert };
+    const { grading: g, notes } = await grading.identify(lookupFor);
+    const coin = manual;
+    if (g) {
+      merge(coin, coinFromGrading(g));
+      if (g.name) coin.notes.push(`identified by ${g.service} cert lookup`);
     }
-    return coin;
+    merge(coin, detected);
+    coin.notes.push(...notes);
+    return { coin, grading: g };
   }
 
   return {
@@ -116,7 +118,7 @@ export function makeDeviceBackend(getSettings) {
     async status() { return { cce_mode: this.mode(), on_device: true }; },
     async testLogin() { const c = cce(); if (!c) throw new Error("Fill in all CCE settings first"); await c.login(); },
     async lookup(req) {
-      const coin = await identify(req);
+      const { coin, grading: g } = await identify(req);
       const c = cce();
       let bids;
       if (!c) bids = await mockBids(coin);
@@ -129,7 +131,7 @@ export function makeDeviceBackend(getSettings) {
           catch (e) { bids = summarise("cce", [], null, e.message || String(e)); }
         }
       }
-      return { coin, bids, verify_url: verifyUrl(coin), cce_url: bids.url || CCE_BASE };
+      return { coin, bids, grading: g, verify_url: verifyUrl(coin), cce_url: bids.url || CCE_BASE };
     },
   };
 }

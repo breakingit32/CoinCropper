@@ -121,3 +121,17 @@ html.native-cam #video { display: none; }
   background: #e8b64c0d; }
 .tag .card.oncoin { transform: translate(-50%, -50%); }
 .tag .card.oncoin::after { display: none; }
+
+/* Grading API details */
+.grading { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; margin: 14px 0; }
+.g-head { display: flex; gap: 10px; align-items: center; }
+.g-head img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; }
+.g-title { font-weight: 600; }
+.grading .stats { margin: 10px 0; }
+.grading .stats div { background: var(--panel); }
+.cac-green { color: #3ccf8e !important; }
+.cac-gold { color: #e8b64c !important; }
+.tag .t1.cac-green::before, .tag .t1.cac-gold::before { content: "● "; }
+.tag .t2.guide { color: #9fd1ff; }
+.settings textarea { background: var(--bg); border: 1px solid #ffffff22; border-radius: 8px; padding: 10px;
+  color: var(--text); font: 12px/1.4 ui-monospace, monospace; resize: vertical; }
