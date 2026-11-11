@@ -60,6 +60,7 @@
       <div><span>Bids</span><b id="dCount">0</b></div>
     </div>
     <p id="dErr" class="err" hidden></p>
+    <p id="dNote" class="muted" hidden></p>
     <table class="quotes"><thead><tr><th></th><th>Price</th><th>Dealer</th><th>Grade</th></tr></thead>
       <tbody id="dQuotes"></tbody></table>
 
@@ -132,12 +133,16 @@
       <p class="muted">The app signs in to CCE itself and keeps you signed in, like a browser would.</p>
       <label>User id <input name="cceUser" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
       <label>Password <input name="ccePass" type="password" autocomplete="current-password"></label>
-      <label>Bid page address
+      <label>Bid page address (optional)
         <input name="cceSearchUrl" autocapitalize="off" autocorrect="off" spellcheck="false"
-               placeholder="/…?barcode={barcode}">
-        <small>The CCE page that lists bids for one coin. Put <b>{barcode}</b> where the scanned
-          barcode goes (or {cert}, {pcgs_no}, {grade_num}, {grade}, {service}, {query}).</small>
+               placeholder="leave blank: coins are opened by PCGS #">
+        <small>Normally blank: the app opens each coin's CCE market by its PCGS # (from the PCGS
+          lookup) and reads the bids for its grade. Only for coins without a PCGS #, a page address
+          with {barcode}, {cert}, {pcgs_no}, {grade_num}, {grade}, {service} or {query}.</small>
       </label>
+      <div class="row">
+        <button type="button" id="copyCcePage">Copy last CCE page</button>
+      </div>
       <h3>Grading APIs</h3>
       <p class="muted">Identify each slab from the grading service's own record: coin, grade,
         PCGS #, price guide, population, auction history and CAC sticker.</p>

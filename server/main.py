@@ -135,7 +135,7 @@ async def lookup(req: LookupRequest) -> dict:
 async def status() -> dict:
     return {
         "cce_mode": "live" if state.get("cce") else "mock",
-        "cce_configured": bool(settings.cce_user_id and settings.cce_search_url),
+        "cce_configured": bool(settings.cce_user_id and settings.cce_password),
         "pcgs_api": bool(settings.pcgs_api_tokens),
         "cac_api": bool(settings.cacg_api_key and settings.cacg_api_token),
     }

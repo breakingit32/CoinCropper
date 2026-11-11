@@ -43,6 +43,9 @@ class Quote:
     description: Optional[str] = None
     cac: bool = False
     when: Optional[str] = None
+    qty: Optional[int] = None
+    sight_seen: bool = False
+    type_coin: bool = False
 
 
 @dataclass
@@ -52,15 +55,24 @@ class BidResult:
     quotes: list[Quote] = field(default_factory=list)
     error: Optional[str] = None
     fetched_at: float = field(default_factory=time.time)
+    for_service: Optional[str] = None
+    market_title: Optional[str] = None
+    note: Optional[str] = None
+
+    def _own(self, side: str) -> list[float]:
+        svc = self.for_service
+        own = [q.price for q in self.quotes if q.side == side and not q.type_coin
+               and (not svc or not q.service or q.service == svc)]
+        return own or [q.price for q in self.quotes if q.side == side]
 
     @property
     def high_bid(self) -> Optional[float]:
-        bids = [q.price for q in self.quotes if q.side == "bid"]
+        bids = self._own("bid")
         return max(bids) if bids else None
 
     @property
     def low_ask(self) -> Optional[float]:
-        asks = [q.price for q in self.quotes if q.side == "ask"]
+        asks = self._own("ask")
         return min(asks) if asks else None
 
     def to_dict(self) -> dict:
@@ -159,6 +171,86 @@ def parse_quotes(html: str, want_grade: Optional[int] = None) -> list[Quote]:
 
 
 # --------------------------------------------------------------------------
+# CCE "View Market" grid (one coin, columns per grade; mirrors web/core.js)
+# --------------------------------------------------------------------------
+
+SVC_LETTERS = {"P": "PCGS", "N": "NGC", "A": "ANACS", "I": "ICG", "C": "CACG"}
+
+
+def _expand(tr) -> list[tuple[str, bool]]:
+    out = []
+    for c in tr.find_all(["th", "td"], recursive=False):
+        try:
+            span = max(1, int(c.get("colspan", 1)))
+        except ValueError:
+            span = 1
+        text = c.get_text(" ", strip=True)
+        out += [(text, i == 0) for i in range(span)]
+    return out
+
+
+def parse_market_grid(html: str) -> dict:
+    soup = BeautifulSoup(html, "html.parser")
+    grades: dict[str, list[Quote]] = {}
+    is_side = lambda row: bool(row) and row[0][0].lower() in ("bid", "ask")
+    for table in soup.find_all("table"):
+        rows = [_expand(tr) for tr in table.find_all("tr", recursive=False) or
+                [tr for tb in table.find_all(["tbody", "thead"], recursive=False) for tr in tb.find_all("tr", recursive=False)]]
+        first = next((i for i, r in enumerate(rows) if is_side(r)), None)
+        if first is None:
+            continue
+        col_grade = None
+        for r in reversed(rows[:first]):
+            if sum(1 for t, f in r if f and re.fullmatch(r"\d{1,2}\+?", t)) >= 2:
+                col_grade = [t if re.fullmatch(r"\d{1,2}\+?", t) else None for t, _ in r]
+                break
+        if not col_grade:
+            continue
+        for r in rows[first:]:
+            if not is_side(r):
+                continue
+            side = r[0][0].lower()
+            by: dict[str, list[str]] = {}
+            for i, (t, f) in enumerate(r):
+                if i and f and i < len(col_grade) and col_grade[i]:
+                    by.setdefault(col_grade[i], []).append(t)
+            for g, parts in by.items():
+                price_txt = next((p for p in parts if re.fullmatch(r"\$?[\d,]+(\.\d+)?s?", p, re.I)), None)
+                price = parse_money(price_txt or "")
+                if not price:
+                    continue
+                rest = parts[parts.index(price_txt) + 1:]
+                qty = next((p for p in rest if p.isdigit()), None)
+                svc = next((p for p in rest if re.fullmatch(r"[A-Z]", p)), None)
+                dealer = next((p for p in rest if p not in (qty, svc) and re.fullmatch(r"[A-Za-z0-9]{2,5}", p)), None)
+                grades.setdefault(g, []).append(Quote(
+                    side=side, price=price, qty=int(qty) if qty else None,
+                    service=SVC_LETTERS.get(svc, svc) if svc else None, dealer=dealer, grade=g,
+                    sight_seen=price_txt.lower().endswith("s"), type_coin=(dealer or "").lower() == "typ"))
+    title = next((t for t in (e.get_text(" ", strip=True) for e in soup.find_all(["td", "th", "div", "span", "h1", "h2", "h3"]))
+                  if len(t) < 80 and re.fullmatch(r"\S+\s+\d{4,6}\s+\d{4}.{2,60}", t)), None)
+    tabs = []
+    for a in soup.find_all("a", href=True):
+        t = a.get_text(" ", strip=True)
+        m = re.search(r"(\d{1,2})\+?\s*-\s*(\d{1,2})\+?", t)
+        if m:
+            tabs.append({"text": t, "href": a["href"], "lo": int(m.group(1)), "hi": int(m.group(2)),
+                         "plus": bool(re.search(r"\+|plus", t, re.I))})
+    return {"title": title, "grades": grades, "tabs": tabs}
+
+
+def quotes_for_grade(grid: dict, grade_num: int, plus: bool = False, service: Optional[str] = None) -> list[Quote]:
+    qs = list(grid["grades"].get(f"{grade_num}{'+' if plus else ''}", []))
+    rank = lambda q: (0 if service and q.service == service else 1) + (2 if q.type_coin else 0)
+    return sorted(qs, key=lambda q: (rank(q), -q.price if q.side == "bid" else q.price))
+
+
+def tab_for_grade(tabs: list[dict], grade_num: int, plus: bool = False) -> Optional[dict]:
+    fit = [t for t in tabs if t["plus"] == plus and t["lo"] <= grade_num <= t["hi"]]
+    return min(fit, key=lambda t: t["hi"] - t["lo"]) if fit else None
+
+
+# --------------------------------------------------------------------------
 # Live client
 # --------------------------------------------------------------------------
 
@@ -176,6 +268,7 @@ class CCEClient:
             headers={"User-Agent": UA}, follow_redirects=True, timeout=20
         )
         self._logged_in_at = 0.0
+        self.last_page: Optional[tuple[str, str]] = None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -225,8 +318,7 @@ class CCEClient:
             url = self.base_url + url
         return url
 
-    async def bids(self, coin: SlabInfo) -> BidResult:
-        url = self.build_url(coin)
+    async def get(self, url: str) -> httpx.Response:
         # Sessions on CCE expire; re-login every 30 minutes or when bounced.
         if time.time() - self._logged_in_at > 1800:
             await self.login()
@@ -235,7 +327,56 @@ class CCEClient:
             await self.login()
             r = await self._client.get(url)
         r.raise_for_status()
-        return BidResult(source="cce", url=url, quotes=parse_quotes(r.text, coin.grade_num))
+        self.last_page = (str(r.url), r.text)
+        return r
+
+    async def view_coin(self, pcgs_no: str) -> httpx.Response:
+        """Open the market screen through the 'View coin#' box on member pages."""
+        home = await self.get(self.base_url + "/")
+        soup = BeautifulSoup(home.text, "html.parser")
+        forms = soup.find_all("form")
+        form = next((f for f in forms if any(re.search("coin", i.get("name", "") + i.get("id", ""), re.I)
+                                             for i in f.find_all("input"))), None) or \
+            next((f for f in forms if re.search(r"coin\s*#", f.get_text(" "), re.I)), None)
+        if not form:
+            raise CCEError("CCE 'View coin#' box not found on the member home page")
+        inputs = form.find_all("input")
+        box = next((i for i in inputs if re.search("coin", i.get("name", "") + i.get("id", ""), re.I)), None) or \
+            next((i for i in inputs if i.get("type", "text") == "text"), None)
+        fields = {i["name"]: (pcgs_no.zfill(5) if i is box else i.get("value", ""))
+                  for i in inputs if i.get("name") and (i is box or i.get("type") == "hidden")}
+        action = str(httpx.URL(str(home.url)).join(form.get("action") or str(home.url)))
+        if (form.get("method") or "get").lower() == "post":
+            r = await self._client.post(action, data=fields)
+            r.raise_for_status()
+            self.last_page = (str(r.url), r.text)
+            return r
+        return await self.get(str(httpx.URL(action, params=fields)))
+
+    async def bids(self, coin: SlabInfo) -> BidResult:
+        plus = "+" in (coin.grade or "")
+        if coin.pcgs_no and coin.grade_num:
+            r = await self.view_coin(coin.pcgs_no)
+            grid = parse_market_grid(r.text)
+            quotes = quotes_for_grade(grid, coin.grade_num, plus, coin.service)
+            if not quotes:
+                tab = tab_for_grade(grid["tabs"], coin.grade_num, plus)
+                if tab:
+                    r = await self.get(str(r.url.join(tab["href"])))
+                    grid = parse_market_grid(r.text)
+                    quotes = quotes_for_grade(grid, coin.grade_num, plus, coin.service)
+            if not grid["grades"] and not quotes:
+                quotes = parse_quotes(r.text, coin.grade_num)
+            return BidResult(source="cce", url=str(r.url), quotes=quotes, for_service=coin.service,
+                             market_title=grid["title"],
+                             note=None if quotes else f"No {coin.service or ''} bids for {coin.grade or coin.grade_num} on CCE")
+        if not self.search_url:
+            raise CCEError("Need the coin's PCGS number to open it on CCE (set PCGS_API_TOKEN or fill in PCGS #)")
+        r = await self.get(self.build_url(coin))
+        grid = parse_market_grid(r.text)
+        quotes = (quotes_for_grade(grid, coin.grade_num, plus, coin.service) if grid["grades"] and coin.grade_num
+                  else parse_quotes(r.text, coin.grade_num))
+        return BidResult(source="cce", url=str(r.url), quotes=quotes, for_service=coin.service)
 
 
 # --------------------------------------------------------------------------

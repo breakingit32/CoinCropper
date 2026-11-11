@@ -135,3 +135,5 @@ html.native-cam #video { display: none; }
 .tag .t2.guide { color: #9fd1ff; }
 .settings textarea { background: var(--bg); border: 1px solid #ffffff22; border-radius: 8px; padding: 10px;
   color: var(--text); font: 12px/1.4 ui-monospace, monospace; resize: vertical; }
+
+.quotes tr.other td { opacity: .55; }

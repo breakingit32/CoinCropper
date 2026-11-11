@@ -27,6 +27,31 @@ await page.addInitScript(() => {
     <tr><td>1881-S $1</td><td>MS65</td><td>Y</td><td>$1,250.00</td><td>$1,400</td><td>ABC Coins</td></tr>
     <tr><td>1881-S $1</td><td>MS65</td><td></td><td>$1,180</td><td></td><td>XYZ Rare</td></tr>
     <tr><td>1881-S $1</td><td>MS64</td><td></td><td>$300</td><td></td><td>Other</td></tr></table>`;
+  const HOME = `<div>User id: Z11 | <a href="/account/logout">Log out</a></div>
+    <form action="/mkt/viewmarket" method="get">View coin# <input type="text" name="coinno"> <input type="submit" value="GO"></form>`;
+  const cell = (p, q, s, d) => `<td>${p}</td><td>${q}</td><td>${s}</td><td>${d}</td>`;
+  const grid = (coinNo, title, grades, rows) => `<div><span>${title}</span></div>
+    <a href="/mkt/viewmarket?coinno=${coinNo}&range=active">°Active 60-67</a>
+    <a href="/mkt/viewmarket?coinno=${coinNo}&range=low">Low 2-30</a>
+    <a href="/mkt/viewmarket?coinno=${coinNo}&range=middle">°Middle 30-60</a>
+    <a href="/mkt/viewmarket?coinno=${coinNo}&range=high">°High 60-70</a>
+    <a href="/mkt/viewmarket?coinno=${coinNo}&range=activeplus">°Active+ 63-66+</a>
+    <table><tr><th>ALL</th>${grades.map((g) => `<th colspan="4">${g}</th>`).join("")}</tr>
+    <tr><td></td>${grades.map(() => `<td colspan="3">View All ...</td><td>(±)</td>`).join("")}</tr>
+    ${rows.map(([side, cells]) => `<tr><td>${side}</td>${cells.map((c) => c ? cell(...c) : "<td></td><td></td><td></td><td></td>").join("")}</tr>`).join("")}
+    <tr><td>(mkt)</td></tr></table>`;
+  // Coin 7268 (1900-O/CC $1), grades 60..67; MS64 column from the tour screenshot.
+  const G = [60, 61, 62, 63, 64, 65, 66, 67];
+  const at = (i, c) => G.map((_, k) => (k === i ? c : null));
+  const MARKET_7268 = grid("07268", "1PE 07268 1900-O/CC $1", G, [
+    ["bid", at(4, ["300", "2", "A", "G78"])], ["bid", at(4, ["320", "1", "P", "G78"])],
+    ["bid", at(4, ["320", "1", "N", "C12"])], ["bid", at(4, ["480", "3", "P", "C12"])],
+    ["bid", at(4, ["540s", "4", "N", "E01"])], ["bid", at(4, ["555s", "5", "P", "E01"])],
+    ["bid", at(5, ["1060", "1", "P", "G78"])], ["bid", at(6, ["580s", "10", "P", "typ"])],
+    ["ask", at(4, ["700s", "1", "P", "G78"])], ["ask", at(4, ["650", "1", "N", "G78"])],
+  ]);
+  // Same coin, High 60-70 tab: grade 68.
+  const HIGH_7268 = grid("07268", "1PE 07268 1900-O/CC $1", [68, 69, 70], [["bid", [["9000", "1", "P", "K36"], null, null]]]);
   const log = (window.__cceLog = []);
   let session = false;
   window.__cceExpire = () => { session = false; };
@@ -49,6 +74,13 @@ await page.addInitScript(() => {
         return { status: 200, data: session ? "<a href='/account/logout'>Logout</a>" : LOGIN, headers: {} };
       }
       if (u.pathname === "/members/bids") return { status: 200, data: session ? BIDS : LOGIN, headers: {} };
+      if (u.pathname === "/") return { status: 200, data: session ? HOME : LOGIN, headers: {} };
+      if (u.pathname === "/mkt/viewmarket") {
+        if (!session) return { status: 200, data: LOGIN, headers: {} };
+        const no = u.searchParams.get("coinno"), range = u.searchParams.get("range");
+        if (no !== "07268") return { status: 200, data: "<p>Coin not found</p>", headers: {} };
+        return { status: 200, data: range === "high" ? HIGH_7268 : MARKET_7268, headers: {}, url: o.url };
+      }
       return { status: 404, data: "", headers: {} };
     },
   };
@@ -90,12 +122,28 @@ check(await page.evaluate(() => localStorage.getItem("cceSearchUrl")) === "/memb
 await page.waitForFunction(() => document.getElementById("mode").textContent === "CCE live");
 check(true, "pill switches to CCE live");
 
-// 4. Live lookup reads bids for the right grade.
-r = await page.evaluate(() => window.__coincropper.lookup("45678912", { pcgs_no: "7144", grade: "MS65" })
+// 4a. CCE market grid, opened by PCGS # through the "View coin#" box.
+r = await page.evaluate(() => window.__coincropper.lookup("02401136", { service: "PCGS", pcgs_no: "7268", grade: "MS64", cert: "02401136" })
+  .then(() => window.__coincropper.coins.get("02401136").result));
+check(r.bids.source === "cce" && r.bids.high_bid === 555 && r.bids.low_ask === 700,
+  `market grid: PCGS MS64 high bid ${r.bids.high_bid}, ask ${r.bids.low_ask}`);
+check(r.bids.quotes.length === 8 && r.bids.quotes[0].service === "PCGS" && r.bids.quotes.find((q) => q.price === 555).sight_seen,
+  "all MS64 quotes kept, PCGS first, sight-seen marked");
+check(r.bids.url.includes("/mkt/viewmarket?coinno=07268"), `coin opened by padded PCGS # (${r.bids.url})`);
+check(r.bids.market_title === "1PE 07268 1900-O/CC $1", "market title read");
+r = await page.evaluate(() => window.__coincropper.lookup("X68", { service: "PCGS", pcgs_no: "7268", grade: "MS68", cert: "11111111" })
+  .then(() => window.__coincropper.coins.get("X68").result));
+check(r.bids.high_bid === 9000 && r.bids.url.includes("range=high"), "grade outside the first tab: follows the High 60-70 tab");
+r = await page.evaluate(() => window.__coincropper.lookup("X66", { service: "PCGS", pcgs_no: "7268", grade: "MS66", cert: "22222222" })
+  .then(() => window.__coincropper.coins.get("X66").result));
+check(r.bids.high_bid === 580 && r.bids.quotes[0].type_coin, "type-coin bid used only when there is nothing else");
+
+// 4b. No PCGS #: falls back to the bid page address from Settings.
+r = await page.evaluate(() => window.__coincropper.lookup("45678912", { grade: "MS65", service: "NGC" })
   .then(() => window.__coincropper.coins.get("45678912").result));
 check(r.bids.source === "cce" && r.bids.high_bid === 1250 && r.bids.low_ask === 1400 && r.bids.bid_count === 2,
   `live bids parsed (high ${r.bids.high_bid}, ask ${r.bids.low_ask}, ${r.bids.bid_count} bids)`);
-check(r.bids.url === "https://www.certifiedcoinexchange.com/members/bids?pcgs=7144&g=65", "search URL filled in");
+check(r.bids.url === "https://www.certifiedcoinexchange.com/members/bids?pcgs=&g=65", "search URL filled in");
 
 // 5. Expired session -> logs in again automatically.
 const before = await page.evaluate(() => window.__cceLog.filter((l) => l.method === "POST").length);
@@ -168,7 +216,7 @@ await waitCoin("47966447");
 const oc = await page.evaluate(() => window.__coincropper.coins.get("47966447"));
 check(oc.code === "" && oc.result.coin.grade === "MS67" && oc.result.coin.pcgs_no === "7286", "slab identified from label text alone");
 check(await page.evaluate(() => window.__coincropper.tracks.has("47966447")), "card shown for text-only slab");
-check(await page.evaluate(() => window.__coincropper.coins.size) === 4, "no duplicate coins (4 total incl. demo lookup)");
+check(await page.evaluate(() => window.__coincropper.coins.size) === 7, "no duplicate coins (7 total incl. earlier lookups)");
 
 // 8. Label layout model on a real label (positions from a phone screenshot, CSS px).
 const lab = await page.evaluate(async () => {

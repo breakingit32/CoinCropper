@@ -6,7 +6,8 @@
 import { coinFromGrading, makeGrading } from "./grading.js";
 import {
   buildSearchUrl, emptyCoin, merge, mockBids, normaliseGrade,
-  parseBarcode, parseLabelText, parseQuotes, summarise, verifyUrl,
+  parseBarcode, parseLabelText, parseMarketGrid, parseQuotes, quotesForGrade, summarise,
+  tabForGrade, verifyUrl,
 } from "./core.js";
 
 export const CCE_BASE = "https://www.certifiedcoinexchange.com";
@@ -52,14 +53,88 @@ export class CCEDirect {
     this.loggedInAt = Date.now();
   }
 
-  async bids(coin) {
-    if (!this.searchUrl) throw new Error("Set the CCE bid page address in Settings");
-    const url = buildSearchUrl(this.searchUrl, this.base, coin);
+  // Fetch a member page, signing in (again) if CCE shows the login form.
+  async get(url) {
     if (Date.now() - this.loggedInAt > RELOGIN_MS) await this.login();
     let r = await http({ url, method: "GET" });
     if (looksLoggedOut(String(r.data || ""))) { await this.login(); r = await http({ url, method: "GET" }); }
-    if (r.status >= 400) throw new Error(`CCE returned HTTP ${r.status}`);
-    return summarise("cce", parseQuotes(String(r.data || ""), coin.grade_num), url);
+    if (r.status >= 400) throw new Error(`CCE returned HTTP ${r.status} for ${url}`);
+    this.remember(r.url || url, r.data);
+    return { url: r.url || url, html: String(r.data || "") };
+  }
+
+  remember(url, html) {
+    this.lastPage = { url, html: String(html || "").slice(0, 500000), when: new Date().toISOString() };
+  }
+
+  abs(href, from) {
+    try { return new URL(href, from || this.base + "/").toString(); } catch { return href; }
+  }
+
+  // Open CCE's market screen for a PCGS coin number through the "View coin#"
+  // box that sits on every member page.
+  async viewCoin(pcgsNo) {
+    const coinNo = String(pcgsNo).padStart(5, "0");
+    const home = await this.get(`${this.base}/`);
+    const doc = new DOMParser().parseFromString(home.html, "text/html");
+    const forms = [...doc.querySelectorAll("form")];
+    const form = forms.find((f) => [...f.querySelectorAll("input")].some((i) => /coin/i.test(i.name || i.id || "")))
+      || forms.find((f) => /coin\s*#/i.test(f.textContent || "") && f.querySelector("input[type=text], input:not([type])"));
+    if (!form) throw new Error("CCE 'View coin#' box not found on the member home page");
+    const input = [...form.querySelectorAll("input")].find((i) => /coin/i.test(i.name || i.id || ""))
+      || form.querySelector("input[type=text], input:not([type])");
+    const fields = {};
+    for (const i of form.querySelectorAll("input")) {
+      const t = (i.getAttribute("type") || "text").toLowerCase();
+      if (i.name && (t === "hidden" || i === input)) fields[i.name] = i === input ? coinNo : i.getAttribute("value") || "";
+    }
+    const action = this.abs(form.getAttribute("action") || home.url, home.url);
+    if ((form.getAttribute("method") || "get").toLowerCase() === "post") {
+      if (Date.now() - this.loggedInAt > RELOGIN_MS) await this.login();
+      const r = await http({ url: action, method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" }, data: fields });
+      this.remember(r.url || action, r.data);
+      if (r.status >= 400) throw new Error(`CCE returned HTTP ${r.status}`);
+      return { url: r.url || action, html: String(r.data || "") };
+    }
+    const u = new URL(action);
+    for (const [k, v] of Object.entries(fields)) u.searchParams.set(k, v);
+    return this.get(u.toString());
+  }
+
+  async bids(coin) {
+    const plus = /\+/.test(coin.grade || "");
+    const svc = coin.service || null;
+    // Market screen by PCGS number (PCGS lookup supplies it); otherwise the
+    // bid page address from Settings, if any.
+    if (coin.pcgs_no && coin.grade_num) {
+      let page = await this.viewCoin(coin.pcgs_no);
+      let grid = parseMarketGrid(page.html);
+      let quotes = quotesForGrade(grid, coin.grade_num, plus, svc);
+      if (!quotes.length) {
+        const tab = tabForGrade(grid.tabs, coin.grade_num, plus);
+        if (tab) {
+          page = await this.get(this.abs(tab.href, page.url));
+          grid = parseMarketGrid(page.html);
+          quotes = quotesForGrade(grid, coin.grade_num, plus, svc);
+        }
+      }
+      if (!Object.keys(grid.grades).length && !quotes.length) {
+        // Not a market grid: fall back to any bid/ask table on the page.
+        quotes = parseQuotes(page.html, coin.grade_num);
+      }
+      const res = summarise("cce", quotes, page.url);
+      res.market_title = grid.title;
+      res.for_service = svc;
+      if (!quotes.length) res.note = `No ${svc || ""} bids for ${coin.grade || coin.grade_num} on CCE`;
+      return withServiceHigh(res, svc);
+    }
+    if (!this.searchUrl) throw new Error("Need the coin's PCGS number to open it on CCE (add PCGS API keys or fill in PCGS #)");
+    const page = await this.get(buildSearchUrl(this.searchUrl, this.base, coin));
+    const grid = parseMarketGrid(page.html);
+    const quotes = Object.keys(grid.grades).length && coin.grade_num
+      ? quotesForGrade(grid, coin.grade_num, plus, svc) : parseQuotes(page.html, coin.grade_num);
+    return withServiceHigh(summarise("cce", quotes, page.url), svc);
   }
 }
 
@@ -69,6 +144,15 @@ export function gradingKeys(s) {
   return { pcgs: [...new Set(pcgs)], cacgKey: s.cacgKey || "", cacgToken: s.cacgToken || "", ngcToken: s.ngcToken || "" };
 }
 
+// High bid for the coin's own grading service (and not a type-coin bid) when there is one.
+function withServiceHigh(res, svc) {
+  const own = res.quotes.filter((q) => q.side === "bid" && !q.type_coin && (!svc || !q.service || q.service === svc));
+  if (own.length) res.high_bid = Math.max(...own.map((q) => q.price));
+  const asks = res.quotes.filter((q) => q.side === "ask" && (!svc || !q.service || q.service === svc));
+  if (asks.length) res.low_ask = Math.min(...asks.map((q) => q.price));
+  return res;
+}
+
 export function makeDeviceBackend(getSettings) {
   let client = null, clientKey = "";
   const cache = new Map();
@@ -76,7 +160,7 @@ export function makeDeviceBackend(getSettings) {
 
   function cce() {
     const s = getSettings();
-    if (!(s.cceUser && s.ccePass && s.cceSearchUrl)) return null;
+    if (!(s.cceUser && s.ccePass)) return null;
     const key = [s.cceUser, s.ccePass, s.cceSearchUrl].join("\u0000");
     if (!client || key !== clientKey) {
       client = new CCEDirect({ userId: s.cceUser, password: s.ccePass, searchUrl: s.cceSearchUrl });
@@ -116,7 +200,8 @@ export function makeDeviceBackend(getSettings) {
   return {
     mode() { return cce() ? "live" : "mock"; },
     async status() { return { cce_mode: this.mode(), on_device: true }; },
-    async testLogin() { const c = cce(); if (!c) throw new Error("Fill in all CCE settings first"); await c.login(); },
+    async testLogin() { const c = cce(); if (!c) throw new Error("Fill in your CCE user id and password first"); await c.login(); },
+    lastCcePage() { return client?.lastPage || null; },
     async lookup(req) {
       const { coin, grading: g } = await identify(req);
       const c = cce();

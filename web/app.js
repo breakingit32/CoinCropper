@@ -452,9 +452,11 @@ function renderSheet() {
   $("dErr").textContent = coin.error || "";
   const quotes = [...(b.quotes || [])].sort((x, y) =>
     x.side === y.side ? (x.side === "bid" ? y.price - x.price : x.price - y.price) : x.side === "bid" ? -1 : 1);
-  $("dQuotes").innerHTML = quotes.map((q) => `<tr>
+  $("dNote").hidden = !(b.note || b.market_title);
+  $("dNote").textContent = [b.market_title && `CCE market: ${b.market_title}`, b.note].filter(Boolean).join(" · ");
+  $("dQuotes").innerHTML = quotes.map((q) => `<tr${q.type_coin || (b.for_service && q.service && q.service !== b.for_service) ? ' class="other"' : ""}>
       <td class="${q.side}">${q.side === "bid" ? "Bid" : "Ask"}</td>
-      <td class="${q.side}">${esc(money(q.price))}${q.cac ? " <small>CAC</small>" : ""}</td>
+      <td class="${q.side}">${esc(money(q.price))}${q.sight_seen ? " <small>sight-seen</small>" : ""}${q.cac ? " <small>CAC</small>" : ""}${q.type_coin ? " <small>type</small>" : ""}${q.qty > 1 ? ` <small>×${q.qty}</small>` : ""}</td>
       <td>${esc(q.dealer || "")}</td><td>${esc([q.service, q.grade].filter(Boolean).join(" "))}</td></tr>`).join("")
     || `<tr><td colspan="4" class="muted">No quotes found.</td></tr>`;
   $("cceLink").href = res.cce_url || "https://www.certifiedcoinexchange.com";
@@ -667,6 +669,25 @@ $("settingsBtn").hidden = !NATIVE;
 $("startSettings").hidden = !NATIVE;
 $("settingsBtn").onclick = openSettings;
 $("importKeys").onclick = () => $("keysFile").click();
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back */ }
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+$("copyCcePage").onclick = async () => {
+  const st = $("settingsStatus");
+  const p = device.lastCcePage?.();
+  if (!p) { st.textContent = "No CCE page fetched yet — scan a coin first."; return; }
+  const text = `URL: ${p.url}\nWhen: ${p.when}\n\n${p.html}`;
+  const ok = await copyText(text);
+  st.textContent = ok ? `✓ Copied ${Math.round(text.length / 1024)} KB from ${p.url}. Paste it in a message or file to send.`
+    : "✗ Could not copy to the clipboard.";
+};
 $("keysFile").onchange = async (e) => {
   const st = $("settingsStatus"), f = $("settingsForm").elements;
   try {

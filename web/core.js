@@ -266,3 +266,89 @@ export async function mockBids(c) {
     dealer: DEALERS[h[18 + i] % 6], grade: c.grade, service: c.service, cac: false });
   return summarise("mock", quotes);
 }
+
+// ------------------------------------------------------------- CCE View Market grid
+//
+// CCE's market screen for one coin (PCGS#) is a grid: one column group per
+// grade (60, 61, ...), each with  price | qty | service | dealer  cells, and rows
+// labelled "bid" / "ask".  A price ending in "s" is sight-seen; dealer "typ"
+// marks a bid for the type coin.  Tabs (Low 2-30, Middle 30-60, High 60-70,
+// "+" markets...) switch the grade range.
+
+const SVC_LETTERS = { P: "PCGS", N: "NGC", A: "ANACS", I: "ICG", C: "CACG" };
+
+function expandRow(tr) {
+  const out = [];
+  for (const c of tr.querySelectorAll(":scope > th, :scope > td")) {
+    const span = Math.max(1, parseInt(c.getAttribute("colspan") || "1", 10) || 1);
+    const text = c.textContent.replace(/\s+/g, " ").trim();
+    for (let i = 0; i < span; i++) out.push({ text, el: c, first: i === 0 });
+  }
+  return out;
+}
+
+export function parseMarketGrid(html) {
+  const doc = typeof html === "string" ? new DOMParser().parseFromString(html, "text/html") : html;
+  const grades = {};
+  let title = null;
+  for (const table of doc.querySelectorAll("table")) {
+    const rows = [...table.querySelectorAll(":scope > tbody > tr, :scope > thead > tr, :scope > tr")];
+    if (!rows.some((r) => /^(bid|ask)$/i.test(expandRow(r)[0]?.text || ""))) continue;
+    // Header: the row before the first bid row whose cells are mostly grade numbers.
+    const firstBid = rows.findIndex((r) => /^(bid|ask)$/i.test(expandRow(r)[0]?.text || ""));
+    let colGrade = null;
+    for (let i = firstBid - 1; i >= 0 && !colGrade; i--) {
+      const cells = expandRow(rows[i]);
+      const nums = cells.filter((c) => c.first && /^\d{1,2}\+?$/.test(c.text));
+      if (nums.length >= 2) colGrade = cells.map((c) => (/^\d{1,2}\+?$/.test(c.text) ? c.text : null));
+    }
+    if (!colGrade) continue;
+    for (const r of rows.slice(firstBid)) {
+      const cells = expandRow(r);
+      const label = (cells[0]?.text || "").toLowerCase();
+      if (label !== "bid" && label !== "ask") continue;
+      const byGrade = {};
+      cells.forEach((c, i) => { const g = colGrade[i]; if (g && i > 0 && c.first) (byGrade[g] ||= []).push(c.text); });
+      for (const [g, parts] of Object.entries(byGrade)) {
+        const priceTxt = parts.find((p) => /^\$?[\d,]+(\.\d+)?s?$/i.test(p));
+        if (!priceTxt) continue;
+        const price = parseMoney(priceTxt);
+        if (!price) continue;
+        const rest = parts.slice(parts.indexOf(priceTxt) + 1);
+        const qty = rest.find((p) => /^\d+$/.test(p));
+        const svc = rest.find((p) => /^[A-Z]$/.test(p));
+        const dealer = rest.find((p) => p !== qty && p !== svc && /^[A-Za-z0-9]{2,5}$/.test(p));
+        (grades[g] ||= []).push({
+          side: label, price, qty: qty ? +qty : null, service: svc ? SVC_LETTERS[svc] || svc : null,
+          dealer: dealer || null, sight_seen: /s$/i.test(priceTxt), type_coin: /^typ$/i.test(dealer || ""),
+          grade: g,
+        });
+      }
+    }
+  }
+  // Coin title, e.g. "1PE 07356 1921 S$1 PEACE"
+  const t = [...doc.querySelectorAll("td, th, div, span, h1, h2, h3")].map((e) => e.textContent.replace(/\s+/g, " ").trim())
+    .find((s) => /^\S+\s+\d{4,6}\s+\d{4}.{2,60}$/.test(s) && s.length < 80);
+  if (t) title = t;
+  // Grade-range tabs
+  const tabs = [...doc.querySelectorAll("a[href]")].map((a) => {
+    const text = a.textContent.replace(/\s+/g, " ").trim();
+    const m = /(\d{1,2})\+?\s*-\s*(\d{1,2})\+?/.exec(text);
+    return m ? { text, href: a.getAttribute("href"), lo: +m[1], hi: +m[2], plus: /\+|plus/i.test(text) } : null;
+  }).filter(Boolean);
+  return { title, grades, tabs };
+}
+
+// Quotes for one coin from a parsed grid. Same-service quotes first.
+export function quotesForGrade(grid, gradeNum, plus = false, service = null) {
+  const key = `${gradeNum}${plus ? "+" : ""}`;
+  const qs = (grid.grades[key] || []).slice();
+  const rank = (q) => (service && q.service === service ? 0 : 1) + (q.type_coin ? 2 : 0);
+  return qs.sort((a, b) => rank(a) - rank(b) || (a.side === "bid" ? b.price - a.price : a.price - b.price));
+}
+
+// Which tab shows this grade (prefers the narrowest range, "+" tabs for + grades).
+export function tabForGrade(tabs, gradeNum, plus = false) {
+  return tabs.filter((t) => t.plus === plus && gradeNum >= t.lo && gradeNum <= t.hi)
+    .sort((a, b) => (a.hi - a.lo) - (b.hi - b.lo))[0] || null;
+}
