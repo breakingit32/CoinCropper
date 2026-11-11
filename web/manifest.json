@@ -1,0 +1,11 @@
+{
+  "name": "CoinCropper",
+  "short_name": "CoinCropper",
+  "description": "Point your camera at certified coin slabs to see CCE bids in AR.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

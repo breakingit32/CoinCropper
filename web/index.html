@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>CoinCropper</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <div id="overlay" aria-live="polite"></div>
+
+    <header id="topbar">
+      <div class="brand">CoinCropper</div>
+      <div id="mode" class="pill">…</div>
+    </header>
+
+    <div id="start" class="center-card">
+      <h1>Point at your slabs</h1>
+      <p>Hover the camera over a case of certified coins. Each slab's barcode
+         gets a floating card with its current CCE bid.</p>
+      <button id="startBtn" class="primary">Start camera</button>
+      <p id="startErr" class="err" hidden></p>
+    </div>
+
+    <footer id="controls" hidden>
+      <button id="pauseBtn" class="round" aria-label="Freeze frame">❚❚</button>
+      <button id="caseBtn" class="pill-btn">
+        <span id="caseCount">0</span> coins · <span id="caseTotal">$0</span>
+      </button>
+      <button id="torchBtn" class="round" aria-label="Flashlight" hidden>☀</button>
+    </footer>
+  </main>
+
+  <!-- Coin detail sheet -->
+  <section id="sheet" class="sheet" hidden>
+    <div class="sheet-grip"></div>
+    <div class="sheet-head">
+      <div>
+        <div id="dTitle" class="d-title"></div>
+        <div id="dSub" class="d-sub"></div>
+      </div>
+      <button class="close" data-close="sheet" aria-label="Close">✕</button>
+    </div>
+    <div class="stats">
+      <div><span>High bid</span><b id="dBid">—</b></div>
+      <div><span>Low ask</span><b id="dAsk">—</b></div>
+      <div><span>Bids</span><b id="dCount">0</b></div>
+    </div>
+    <p id="dErr" class="err" hidden></p>
+    <table class="quotes"><thead><tr><th></th><th>Price</th><th>Dealer</th><th>Grade</th></tr></thead>
+      <tbody id="dQuotes"></tbody></table>
+
+    <details id="editBox">
+      <summary>Fix coin details</summary>
+      <form id="editForm">
+        <label>Service
+          <select name="service"><option value="">?</option><option>PCGS</option><option>NGC</option><option>CACG</option><option>ANACS</option><option>ICG</option></select>
+        </label>
+        <label>Cert # <input name="cert" inputmode="numeric" autocomplete="off"></label>
+        <label>PCGS # <input name="pcgs_no" inputmode="numeric" autocomplete="off"></label>
+        <label>Grade <input name="grade" placeholder="MS65 / PR69 DCAM" autocapitalize="characters" autocomplete="off"></label>
+        <label class="wide">Description <input name="description" placeholder="1881-S Morgan $1" autocomplete="off"></label>
+        <div class="row">
+          <button type="button" id="ocrBtn">Read label text</button>
+          <button type="submit" class="primary">Update bids</button>
+        </div>
+        <p id="ocrStatus" class="muted" hidden></p>
+      </form>
+    </details>
+
+    <div class="links">
+      <a id="cceLink" target="_blank" rel="noopener">Open on CCE ↗</a>
+      <a id="verifyLink" target="_blank" rel="noopener">Verify cert ↗</a>
+    </div>
+    <p id="dNotes" class="muted"></p>
+  </section>
+
+  <!-- Case summary -->
+  <section id="caseSheet" class="sheet" hidden>
+    <div class="sheet-grip"></div>
+    <div class="sheet-head">
+      <div><div class="d-title">This case</div><div id="caseSub" class="d-sub"></div></div>
+      <button class="close" data-close="caseSheet" aria-label="Close">✕</button>
+    </div>
+    <ul id="caseList" class="case-list"></ul>
+    <div class="row">
+      <button id="exportBtn">Copy as CSV</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+  </section>
+
+  <canvas id="work" hidden></canvas>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
