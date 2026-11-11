@@ -129,11 +129,12 @@ const waitCoin = (k) => page.waitForFunction((k) => window.__coincropper.coins.g
 // a) Barcode only.
 await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) }]);
 await waitCoin("6521437-005");
-const tag = await page.evaluate(() => {
-  const b = window.__coincropper.tracks.get("6521437-005").el.querySelector(".box").style;
-  return [b.left, b.top, b.width, b.height].join(" ");
-});
-check(tag === "50px 300px 200px 40px", `AR box placed from scanner corners (${tag})`);
+const sl = await page.evaluate(() => window.__coincropper.tracks.get("6521437-005").slab);
+// Barcode is CSS 50..250 x 300..340: the slab must be wider, contain it near its top, and extend down.
+check(sl && sl.cx > 140 && sl.cx < 160 && sl.w > 300 && sl.cy - sl.h / 2 < 300 && sl.cy + sl.h / 2 > 600,
+  `slab outline estimated from barcode (${sl && [sl.cx, sl.cy, sl.w, sl.h].map(Math.round)})`);
+const cls = await page.evaluate(() => window.__coincropper.tracks.get("6521437-005").el.querySelector(".box").className);
+check(cls.includes("slab"), "slab outline drawn");
 const ngc = await page.evaluate(() => window.__coincropper.coins.get("6521437-005").result?.coin);
 check(ngc?.service === "NGC" && ngc?.cert === "6521437-005", "NGC cert recognised from barcode");
 
@@ -168,6 +169,42 @@ const oc = await page.evaluate(() => window.__coincropper.coins.get("47966447"))
 check(oc.code === "" && oc.result.coin.grade === "MS67" && oc.result.coin.pcgs_no === "7286", "slab identified from label text alone");
 check(await page.evaluate(() => window.__coincropper.tracks.has("47966447")), "card shown for text-only slab");
 check(await page.evaluate(() => window.__coincropper.coins.size) === 4, "no duplicate coins (4 total incl. demo lookup)");
+
+// 8. Label layout model on a real label (positions from a phone screenshot, CSS px).
+const lab = await page.evaluate(async () => {
+  const { readSlabs } = await import("./slab.js");
+  const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const lines = [
+    // slab above (only its lower part visible)
+    { text: "1899-S", corners: R(300, 150, 390, 180) }, { text: "PCGS MS64", corners: R(390, 185, 555, 215) },
+    { text: "7262.64/81628472", corners: R(365, 265, 575, 290) },
+    // our slab
+    { text: "PCGS", corners: R(420, 740, 530, 762) }, { text: "1900-0/CC", corners: R(235, 765, 455, 802) },
+    { text: "S$1", corners: R(645, 770, 715, 805) }, { text: "MS64", corners: R(428, 808, 525, 845) },
+    { text: "7268.64/2401136", corners: R(275, 885, 655, 925) },
+  ];
+  const bars = [{ raw: "BAR1", corners: R(285, 932, 670, 970) }];
+  return readSlabs(lines, bars);
+});
+const s1 = lab.slabs.find((x) => x.cert === "2401136"), s0 = lab.slabs.find((x) => x.cert === "81628472");
+check(lab.slabs.length === 2 && s1 && s0, "two slabs found");
+check(s1.fields.year === "1900-O/CC" && s1.fields.denomination === "S$1" && s1.fields.grade === "MS64",
+  `fields by position: ${JSON.stringify(s1.fields)}`);
+check(s1.code === "BAR1" && !lab.loose.length, "barcode under the cert line belongs to the label");
+check(s0.fields.year === "1899-S" && s0.fields.grade === "MS64", "slab above keeps its own label lines");
+const b1 = s1.slab;   // true slab in the screenshot: x 80..865, y 645..1590, coin centre ~(472, 1290)
+check(b1.cx - b1.w / 2 < 240 && b1.cx + b1.w / 2 > 710 && b1.cy - b1.h / 2 < 735 && b1.cy + b1.h / 2 > 1400 &&
+  Math.abs(b1.cx - 472) < 40, `slab rectangle covers label and coin (${[b1.cx, b1.cy, b1.w, b1.h].map(Math.round)})`);
+check(s1.ocr.startsWith("1900-O/CC S$1\nPCGS MS64\n7268.64/2401136"), "canonical label text");
+const rot = await page.evaluate(async () => {
+  const { readSlabs } = await import("./slab.js");
+  const a = 0.2, c = Math.cos(a), s = Math.sin(a);
+  const T = (pts) => pts.map(([x, y]) => [500 + (x - 500) * c - (y - 900) * s, 900 + (x - 500) * s + (y - 900) * c]);
+  const R = (x0, y0, x1, y1) => T([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+  return readSlabs([{ text: "1900-0/CC", corners: R(235, 765, 455, 802) }, { text: "S$1", corners: R(645, 770, 715, 805) },
+    { text: "MS64", corners: R(428, 808, 525, 845) }, { text: "7268.64/2401136", corners: R(275, 885, 655, 925) }], []);
+});
+check(Math.abs(rot.slabs[0].slab.angle - 0.2) < 0.01 && rot.slabs[0].fields.denomination === "S$1", "tilted slab: angle and fields");
 
 // 7. {barcode} placeholder sends the full scanned value.
 const urls = await page.evaluate(async () => {

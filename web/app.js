@@ -1,7 +1,7 @@
 // CoinCropper — point the phone at slabbed coins, get CCE bids floating over each one.
 
 import { makeDeviceBackend } from "./device.js";
-import { labelAnchor } from "./core.js";
+import { readSlabs, slabFromBarcode } from "./slab.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
@@ -229,21 +229,37 @@ function coinTitle(coin) {
 
 // ---------------------------------------------------------------- scanning
 
-// found: [{key, box, code?, ocr?}] — code = barcode value, ocr = label text.
+// found: [{key, box | slab, code?, ocr?, complete?, rel?}]
+//   box  = axis-aligned barcode box (website scanner)
+//   slab = {cx, cy, w, h, angle} rectangle of the whole slab (Android app)
+//   code = barcode value, ocr = label text, rel = slab geometry relative to its barcode
 function ingest(found) {
   const now = performance.now();
+  const a = 0.55;   // smoothing
   for (const f of found) {
     const key = f.key?.trim();
     if (!key) continue;
     let t = tracks.get(key);
     if (!t) {
-      t = { box: { ...f.box }, lastSeen: now, el: null };
+      t = { key, lastSeen: now, el: null };
+      if (f.box) t.box = { ...f.box };
+      if (f.slab) t.slab = { ...f.slab };
       tracks.set(key, t);
-    } else {   // smooth jitter
-      const a = 0.55;
-      for (const k of ["x", "y", "w", "h"]) t.box[k] += (f.box[k] - t.box[k]) * a;
+    } else {
+      if (f.box) {
+        if (!t.box) t.box = { ...f.box };
+        for (const k of ["x", "y", "w", "h"]) t.box[k] += (f.box[k] - t.box[k]) * a;
+      }
+      if (f.slab) {
+        if (!t.slab) t.slab = { ...f.slab };
+        for (const k of ["cx", "cy", "w", "h"]) t.slab[k] += (f.slab[k] - t.slab[k]) * a;
+        let d = f.slab.angle - t.slab.angle;
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        t.slab.angle += d * a;
+      }
     }
-    t.raw = { ...f.box };
+    if (f.box) t.raw = { ...f.box };
+    if (f.rel) t.rel = f.rel;
     t.lastSeen = now;
 
     let coin = coins.get(key), changed = false;
@@ -253,7 +269,12 @@ function ingest(found) {
       changed = true;
     }
     if (f.code && !coin.code) { coin.code = f.code; changed = true; }
-    if (f.ocr && !coin.overrides.ocr_text) { coin.overrides.ocr_text = f.ocr; changed = true; }
+    // Use the first label reading, and again once one has year + grade.
+    if (f.ocr && (!coin.overrides.ocr_text || (f.complete && !coin.ocrComplete))) {
+      coin.overrides.ocr_text = f.ocr;
+      coin.ocrComplete = !!f.complete;
+      changed = true;
+    }
     if (changed) lookup(key);
   }
 }
@@ -266,7 +287,7 @@ function linkBarcode(raw, cert) {
   aliases.set(raw, cert);
   const oldT = tracks.get(raw), oldC = coins.get(raw);
   if (oldT) {
-    if (!tracks.has(cert)) tracks.set(cert, oldT); else oldT.el?.remove();
+    if (!tracks.has(cert)) { oldT.key = cert; tracks.set(cert, oldT); } else oldT.el?.remove();
     tracks.delete(raw);
   }
   if (oldC) {
@@ -288,40 +309,26 @@ function frameMapper(ev) {
   const vw = v.w || innerWidth * dpr, vh = v.h || innerHeight * dpr;
   const s = Math.max(vw / ev.width, vh / ev.height);
   const ox = (v.x || 0) + (vw - ev.width * s) / 2, oy = (v.y || 0) + (vh - ev.height * s) / 2;
-  return (corners) => {
-    const xs = corners.map((p) => (p[0] * s + ox) / dpr), ys = corners.map((p) => (p[1] * s + oy) / dpr);
-    const x = Math.min(...xs), y = Math.min(...ys);
-    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
-  };
+  return (corners) => corners.map((p) => [(p[0] * s + ox) / dpr, (p[1] * s + oy) / dpr]);
 }
-const cx = (b) => b.x + b.w / 2, cy = (b) => b.y + b.h / 2;
-const hOverlap = (a, b) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
-
 export function handleFrame(ev) {
   if (paused || !ev?.width) return;
   const map = frameMapper(ev);
-  const bars = (ev.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), box: map(b.corners) }));
+  let bars = (ev.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: map(b.corners) }));
   const found = [];
   if (ev.lines) {
-    const lines = ev.lines.map((l) => ({ text: l.text, block: l.block, box: map(l.corners) }));
-    for (const a of lines) {
-      const id = labelAnchor(a.text);
-      if (!id) continue;
-      const lh = a.box.h || 10;
-      // The rest of the label: lines above the cert line (year, denomination, grade).
-      const ctx = lines.filter((l) => l === a || l.block === a.block ||
-        (l.box.y < a.box.y + lh && a.box.y - l.box.y < lh * 6 &&
-         hOverlap(l.box, { x: a.box.x - a.box.w * 0.6, w: a.box.w * 2.2 }) > 0));
-      ctx.sort((p, q) => p.box.y - q.box.y || p.box.x - q.box.x);
-      const ocr = ctx.map((l) => l.text).join("\n");
-      // Barcode printed just below/above that line on the same label?
-      const bar = bars.find((b) => hOverlap(b.box, a.box) > Math.min(b.box.w, a.box.w) * 0.3 &&
-        Math.abs(cy(b.box) - cy(a.box)) < lh * 3 + b.box.h);
-      if (bar) { linkBarcode(bar.raw, id.cert); bar.ocr = ocr; }
-      else found.push({ key: id.cert, box: a.box, ocr });
+    const lines = ev.lines.map((l) => ({ text: l.text, corners: map(l.corners) }));
+    const { slabs, loose } = readSlabs(lines, bars);
+    for (const sl of slabs) {
+      if (sl.code) linkBarcode(sl.code, sl.cert);
+      found.push({ key: sl.cert, slab: sl.slab, code: sl.code, ocr: sl.ocr, complete: sl.complete, rel: sl.rel });
     }
+    bars = loose;
   }
-  for (const b of bars) found.push({ key: aliases.get(b.raw) || b.raw, box: b.box, code: b.raw, ocr: b.ocr });
+  for (const b of bars) {
+    const key = aliases.get(b.raw) || b.raw;
+    found.push({ key, code: b.raw, slab: slabFromBarcode(b.corners, tracks.get(key)?.rel) });
+  }
   ingest(found);
 }
 
@@ -367,20 +374,35 @@ function renderTags() {
       t.el = document.createElement("div");
       t.el.className = "tag";
       t.el.innerHTML = `<div class="box"></div><div class="card"><div class="t1"></div><div class="t2"></div></div>`;
-      t.el.addEventListener("click", () => openSheet(code));
+      t.el.addEventListener("click", () => openSheet(t.key));
       overlay.appendChild(t.el);
     }
     const coin = coins.get(code) || {};
-    const s = toScreen(t.box);
     const box = t.el.firstChild, card = t.el.lastChild;
-    Object.assign(box.style, { left: s.x + "px", top: s.y + "px", width: s.w + "px", height: s.h + "px" });
-    // Float the card above the barcode; flip below it near the top edge and keep
-    // it inside the screen horizontally.
     const cw = card.offsetWidth || 140, chh = card.offsetHeight || 50;
-    const below = s.y - 10 - chh < 56;
-    const cx = Math.min(Math.max(s.x + s.w / 2, cw / 2 + 6), overlay.clientWidth - cw / 2 - 6);
-    card.classList.toggle("below", below);
-    Object.assign(card.style, { left: cx + "px", top: (below ? s.y + s.h + 10 : s.y - 10) + "px" });
+    if (t.slab) {
+      // Outline the whole slab and put the card over the coin, below the label.
+      const sl = t.slab, deg = sl.angle * 180 / Math.PI;
+      box.classList.add("slab");
+      Object.assign(box.style, { left: sl.cx - sl.w / 2 + "px", top: sl.cy - sl.h / 2 + "px",
+        width: sl.w + "px", height: sl.h + "px", transform: `rotate(${deg}deg)` });
+      const d = sl.h * 0.14;
+      const px = sl.cx - Math.sin(sl.angle) * d, py = sl.cy + Math.cos(sl.angle) * d;
+      card.classList.add("oncoin");
+      Object.assign(card.style, {
+        left: Math.min(Math.max(px, cw / 2 + 6), overlay.clientWidth - cw / 2 - 6) + "px",
+        top: Math.min(Math.max(py, chh / 2 + 56), overlay.clientHeight - chh / 2 - 90) + "px",
+        maxWidth: Math.max(120, sl.w * 0.95) + "px" });
+    } else {
+      const s = toScreen(t.box);
+      Object.assign(box.style, { left: s.x + "px", top: s.y + "px", width: s.w + "px", height: s.h + "px" });
+      // Float the card above the barcode; flip below it near the top edge and keep
+      // it inside the screen horizontally.
+      const below = s.y - 10 - chh < 56;
+      const cx = Math.min(Math.max(s.x + s.w / 2, cw / 2 + 6), overlay.clientWidth - cw / 2 - 6);
+      card.classList.toggle("below", below);
+      Object.assign(card.style, { left: cx + "px", top: (below ? s.y + s.h + 10 : s.y - 10) + "px" });
+    }
     t.el.classList.toggle("stale", !paused && age > 400);
     t.el.classList.toggle("loading", coin.status === "loading");
     t.el.classList.toggle("error", coin.status === "error");

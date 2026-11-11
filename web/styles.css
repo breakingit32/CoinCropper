@@ -115,3 +115,9 @@ summary { cursor: pointer; font-weight: 600; }
 /* Android app with the native camera preview behind the page */
 html.native-cam, html.native-cam body, html.native-cam #stage { background: transparent; }
 html.native-cam #video { display: none; }
+
+/* Slab outline (area of interest) with the card over the coin */
+.tag .box.slab { border-radius: 10px; border-color: #e8b64ccc; transform-origin: 50% 50%;
+  background: #e8b64c0d; }
+.tag .card.oncoin { transform: translate(-50%, -50%); }
+.tag .card.oncoin::after { display: none; }
