@@ -214,7 +214,7 @@ export function buildSearchUrl(template, base, c) {
   let url = template
     .replaceAll("{pcgs_no}", enc(c.pcgs_no)).replaceAll("{grade}", enc(c.grade))
     .replaceAll("{grade_num}", c.grade_num ?? "").replaceAll("{service}", enc(c.service))
-    .replaceAll("{cert}", enc(c.cert)).replaceAll("{query}", enc(query));
+    .replaceAll("{cert}", enc(c.cert)).replaceAll("{barcode}", enc(c.raw)).replaceAll("{query}", enc(query));
   if (url.startsWith("/")) url = base.replace(/\/+$/, "") + url;
   return url;
 }

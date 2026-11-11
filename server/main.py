@@ -93,7 +93,7 @@ async def identify(req: LookupRequest) -> SlabInfo:
 async def get_bids(coin: SlabInfo) -> BidResult:
     if not state.get("cce"):
         return mock_bids(coin)
-    key = (coin.service, coin.cert, coin.pcgs_no, coin.grade, coin.description)
+    key = (coin.raw, coin.service, coin.cert, coin.pcgs_no, coin.grade, coin.description)
     hit = state["cache"].get(key)
     if hit and time.time() - hit.fetched_at < settings.cache_seconds:
         return hit

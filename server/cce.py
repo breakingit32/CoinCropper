@@ -218,6 +218,7 @@ class CCEClient:
             grade_num=coin.grade_num or "",
             service=quote_plus(coin.service or ""),
             cert=quote_plus(coin.cert or ""),
+            barcode=quote_plus(coin.raw or ""),
             query=quote_plus(query),
         )
         if url.startswith("/"):

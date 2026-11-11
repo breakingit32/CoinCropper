@@ -61,3 +61,10 @@ async def test_live_client_logs_in_and_parses():
     assert "tok" in seen["login"] and "me" in seen["login"]
     assert seen["search"].endswith("/members/search?p=7144&g=65")
     assert res.high_bid == 1250 and res.low_ask == 1400
+
+
+def test_build_url_with_full_barcode():
+    from server.labels import parse_barcode
+    cli = CCEClient("https://cce.test", "me", "pw", "/members/lookup?bc={barcode}&g={grade_num}")
+    coin = parse_barcode("6521437-005")
+    assert cli.build_url(coin) == "https://cce.test/members/lookup?bc=6521437-005&g="

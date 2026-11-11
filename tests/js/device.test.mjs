@@ -133,6 +133,16 @@ check(tag.left === "50px" && tag.top === "300px" && tag.width === "200px" && tag
 const ngc = await page.evaluate(() => window.__coincropper.coins.get("6521437-005").result?.coin);
 check(ngc?.service === "NGC" && ngc?.cert === "6521437-005", "NGC cert recognised from scan");
 
+// 7. {barcode} placeholder sends the full scanned value.
+const urls = await page.evaluate(async () => {
+  const { buildSearchUrl, parseBarcode } = await import("./core.js");
+  const base = "https://www.certifiedcoinexchange.com";
+  return [buildSearchUrl("/m/lookup?bc={barcode}", base, parseBarcode("6521437-005")),
+          buildSearchUrl("/m/lookup?bc={barcode}", base, parseBarcode("https://www.pcgs.com/cert/45678912"))];
+});
+check(urls[0] === "https://www.certifiedcoinexchange.com/m/lookup?bc=6521437-005", `{barcode} NGC → ${urls[0]}`);
+check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F%2Fwww.pcgs.com%2Fcert%2F45678912", "{barcode} QR URL is encoded");
+
 await browser.close();
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

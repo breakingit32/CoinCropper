@@ -103,7 +103,7 @@ In `.env`:
 CCE_MODE=live
 CCE_USER_ID=your-cce-user-id
 CCE_PASSWORD=your-cce-password
-CCE_SEARCH_URL=/path/to/member/bid/page?pcgs={pcgs_no}&grade={grade_num}
+CCE_SEARCH_URL=/path/to/member/bid/page?barcode={barcode}
 ```
 
 `CCE_SEARCH_URL` is the member-area page that shows bids for **one coin**.
@@ -116,6 +116,7 @@ page's address, replacing the coin-specific parts with placeholders:
 | `{grade}`     | `MS65`, `PR69 DCAM`|
 | `{grade_num}` | `65`               |
 | `{service}`   | `PCGS`, `NGC`      |
+| `{barcode}`   | the full scanned barcode, exactly as read (best: CCE can look coins up by it) |
 | `{cert}`      | `45678912`         |
 | `{query}`     | `1881-S $1 MS65`   |
 

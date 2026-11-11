@@ -121,7 +121,7 @@ export function makeDeviceBackend(getSettings) {
       let bids;
       if (!c) bids = await mockBids(coin);
       else {
-        const key = JSON.stringify([coin.service, coin.cert, coin.pcgs_no, coin.grade, coin.description]);
+        const key = JSON.stringify([coin.raw, coin.service, coin.cert, coin.pcgs_no, coin.grade, coin.description]);
         const hit = cache.get(key);
         if (hit && Date.now() - hit.fetched_at * 1000 < CACHE_MS) bids = hit;
         else {

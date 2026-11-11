@@ -31,7 +31,7 @@ class Settings:
     cce_user_id: str = os.getenv("CCE_USER_ID", "")
     cce_password: str = os.getenv("CCE_PASSWORD", "")
     # Member-area page that lists bids for one coin.  Placeholders:
-    # {pcgs_no} {grade} {grade_num} {service} {cert} {query}
+    # {pcgs_no} {grade} {grade_num} {service} {cert} {barcode} {query}
     cce_search_url: str = os.getenv("CCE_SEARCH_URL", "")
     # Optional PCGS public API token (free at pcgs.com/publicapi) used to turn a
     # cert number into the coin's PCGS number, name and grade.

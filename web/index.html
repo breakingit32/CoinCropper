@@ -117,9 +117,9 @@
       <label>Password <input name="ccePass" type="password" autocomplete="current-password"></label>
       <label>Bid page address
         <input name="cceSearchUrl" autocapitalize="off" autocorrect="off" spellcheck="false"
-               placeholder="/…?pcgs={pcgs_no}&amp;grade={grade_num}">
-        <small>The CCE page that lists bids for one coin, with the coin's details replaced by
-          {pcgs_no}, {grade_num}, {grade}, {service}, {cert} or {query}.</small>
+               placeholder="/…?barcode={barcode}">
+        <small>The CCE page that lists bids for one coin. Put <b>{barcode}</b> where the scanned
+          barcode goes (or {cert}, {pcgs_no}, {grade_num}, {grade}, {service}, {query}).</small>
       </label>
       <h3>PCGS (optional)</h3>
       <label>PCGS API token
