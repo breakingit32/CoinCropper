@@ -119,7 +119,7 @@ html.native-cam #video { display: none; }
 /* Slab outline (area of interest) with the card over the coin */
 .tag .box.slab { border-radius: 10px; border-color: #e8b64ccc; transform-origin: 50% 50%;
   background: #e8b64c0d; }
-.tag .card.oncoin { transform: translate(-50%, -50%); }
+.tag .card.oncoin { transform: translate(-50%, -50%) scale(var(--k, 1)); transform-origin: 50% 50%; }
 .tag .card.oncoin::after { display: none; }
 
 /* Grading API details */

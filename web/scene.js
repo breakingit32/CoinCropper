@@ -139,42 +139,54 @@ export class SceneMap {
     }
     for (const [k, p] of this.pending) if (t - p.last > this.confirmMs) this.pending.delete(k);
 
-    // 2. Localise: the island with the most matches this frame.
+    // 2. Localise: the island with the most matches this frame. The camera
+    //    estimate is only trusted ("good") when 2+ matches agree on it; one
+    //    slab's own outline is too rough to place the others from.
     const byIsland = new Map();
     for (const d of known) {
       const s = this.slabs.get(d.key);
       (byIsland.get(s.island) || byIsland.set(s.island, []).get(s.island)).push([s.world, d.slab, d.key]);
     }
-    let main = null, mainT = null, mainPairs = [], inlierKeys = new Set();
+    let main = null, mainT = null, mainPairs = [], inlierKeys = new Set(), good = false;
     for (const [id, pairs] of byIsland) {
       if (pairs.length > mainPairs.length) { main = id; mainPairs = pairs; }
     }
     if (main != null) {
       const { T, inliers } = robustFit(mainPairs);
       inlierKeys = new Set(inliers.map((p) => p[2]));
+      good = inlierKeys.size >= 2;
       const isl = this.islands.get(main);
       mainT = isl && t - isl.at < 400 ? blendT(isl.T, T, this.smooth) : T;
-      this.islands.set(main, { T: mainT, at: t });
-      // 3. Other islands in view: merge them into the main one.
+      this.islands.set(main, { T: mainT, at: t, good });
+      // 3. Other islands in view: merge them into the main one. A one-slab
+      //    island just takes the slab's position as seen now; bigger islands
+      //    need both sides pinned down (2+ agreeing matches) to line them up.
+      const invMain = invert(T);   // this frame's own fit (smoothing is for display only)
       for (const [id, pairs] of byIsland) {
         if (id === main) continue;
-        const T2 = robustFit(pairs).T;
-        const toMain = compose(invert(mainT), T2);   // other world -> main world
-        for (const s of this.slabs.values()) {
-          if (s.island !== id) continue;
-          s.world = poseTo(toMain, s.world); s.island = main;
+        const members = [...this.slabs.values()].filter((s) => s.island === id);
+        let toMain = null;
+        if (members.length === 1) {
+          members[0].world = poseTo(invMain, pairs[0][1]);
+          members[0].island = main;
+          this.islands.delete(id);
+          continue;
         }
+        if (!good || pairs.length < 2) continue;
+        const { T: T2, inliers: in2 } = robustFit(pairs);
+        if (in2.length < 2) continue;
+        toMain = compose(invMain, T2);   // other world -> main world
+        for (const s of members) { s.world = poseTo(toMain, s.world); s.island = main; }
         this.islands.delete(id);
       }
-      // 4. Refine remembered positions a little from what's seen (only when
-      //    several slabs pin the transform down).
-      if (inlierKeys.size >= 2) {
-        const inv = invert(mainT);
+      if (good) {
+        // 4. Refine remembered positions from what's seen.
+        const inv = invMain, k = inlierKeys.size >= 3 ? 0.3 : 0.15;
         for (const d of known) {
           if (!inlierKeys.has(d.key)) continue;
           const s = this.slabs.get(d.key);
           const w = poseTo(inv, d.slab);
-          for (const k of ["cx", "cy", "w", "h"]) s.world[k] += (w[k] - s.world[k]) * 0.15;
+          for (const f of ["cx", "cy", "w", "h"]) s.world[f] += (w[f] - s.world[f]) * k;
         }
       }
     }
@@ -183,33 +195,47 @@ export class SceneMap {
     if (fresh.length && main == null) {
       main = this.nextIsland++;
       mainT = identity();
-      this.islands.set(main, { T: mainT, at: t });
+      good = true;
+      this.islands.set(main, { T: mainT, at: t, good: true });
     }
-    const inv = mainT ? invert(mainT) : null;
+    const inv = main != null && byIsland.has(main) ? invert(robustFit(mainPairs).T) : mainT ? invert(mainT) : null;
+    const liveDets = new Map(known.map((d) => [d.key, d]));
     for (const d of fresh) {
+      // Same spot on screen as a slab read in this frame, or (with a good
+      // camera estimate) as a mapped slab: it's that slab, read differently.
+      // Two slabs can't be in the same place.
+      let dup = [...liveDets.values()].find((o) => o.key !== d.key && overlap(o.slab, d.slab));
       const world = poseTo(inv, d.slab);
-      // Same place as a slab already mapped? Then it's that slab, read differently.
-      const dup = [...this.slabs.values()].find((s) => s.island === main && overlap(s.world, world));
-      if (dup && !d.sure) { this.aliases.set(d.key, dup.key); known.push({ ...d, key: dup.key }); continue; }
+      if (!dup && good) {
+        const m = [...this.slabs.values()].find((s) => s.island === main && overlap(s.world, world));
+        if (m) dup = { key: m.key };
+      }
+      if (dup) {
+        this.aliases.set(d.key, dup.key);
+        if (!liveDets.has(dup.key)) liveDets.set(dup.key, { ...d, key: dup.key });
+        continue;
+      }
       this.slabs.set(d.key, { key: d.key, world, island: main, seen: 1, firstSeen: t, lastSeen: t });
       this.pending.delete(d.key);
+      liveDets.set(d.key, d);
     }
-    for (const d of known) { const s = this.slabs.get(d.key); if (s) { s.seen++; s.lastSeen = t; } }
+    for (const d of liveDets.values()) { const s = this.slabs.get(d.key); if (s) { s.seen++; s.lastSeen = t; } }
 
-    // 6. Project the remembered slabs of the island in view.
-    const live = new Set([...known, ...fresh].map((d) => this.resolve(d.key)));
+    // 6. Output: slabs read this frame at their detected position; the other
+    //    remembered slabs of this island only when the camera estimate is good.
     const visible = [];
+    for (const d of liveDets.values()) visible.push({ key: d.key, slab: d.slab, live: true });
     let isl = main != null ? this.islands.get(main) : null;
-    if (!isl) {   // nothing recognised this frame: hold the last view briefly
+    if (!isl) {   // nothing recognised this frame: hold the last good view briefly
       for (const [id, x] of this.islands) if (t - x.at < this.holdMs && (!isl || x.at > isl.at)) { isl = x; main = id; }
     }
-    if (isl) {
+    if (isl?.good) {
       for (const s of this.slabs.values()) {
-        if (s.island !== main) continue;
-        visible.push({ key: s.key, slab: poseTo(isl.T, s.world), live: live.has(s.key) });
+        if (s.island !== main || liveDets.has(s.key)) continue;
+        visible.push({ key: s.key, slab: poseTo(isl.T, s.world), live: false });
       }
     }
-    return { visible, accepted: live };
+    return { visible, accepted: new Set(liveDets.keys()) };
   }
 
   size() { return this.slabs.size; }

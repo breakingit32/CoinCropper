@@ -18,7 +18,7 @@ import { labelAnchor, normaliseGrade } from "./core.js";
 
 // Slab proportions relative to the label (typical PCGS/NGC holders; tune here).
 export const LAYOUT = {
-  slabWidthPerLabel: 1.25,   // slab width / label width
+  slabWidthPerLabel: 1.38,   // slab width / width of the label text (calibrated on PCGS holders)
   slabHeightPerWidth: 1.42,  // slab height / slab width
   slabTopAboveLabel: 0.10,   // gap from slab top to label top, × label width
   minLabelPerAnchor: 1.35,   // label is at least this × the cert line's width
@@ -139,12 +139,13 @@ export function readSlabs(lines, barcodes) {
     const cands = lines.filter((l) => l !== anchor && !labelAnchor(l.text)).map((l) => {
       const [cu, cv] = proj(f, centroid(l.corners));
       return { text: l.text, corners: l.corners, cu, cv };
-    }).filter((m) => m.cv < -0.5 * H && m.cv > -7 * H && Math.abs(m.cu) < 1.4 * W)
+    }).filter((m) => m.cv < -0.5 * H && m.cv > -9 * H && Math.abs(m.cu) < 1.5 * W)
       .sort((p, q) => q.cv - p.cv);
     const members = [];
     let prev = 0;
     for (const m of cands) {
-      if (prev - m.cv > 3.5 * H) break;
+      // Real PCGS labels: grade line ~4 line-heights above the cert line.
+      if (prev - m.cv > 5 * H) break;
       members.push(m); prev = m.cv;
     }
 

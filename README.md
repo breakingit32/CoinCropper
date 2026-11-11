@@ -192,6 +192,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest                          # server
 node tests/js/device.test.mjs   # app's on-device mode (needs Playwright)
 node tests/js/scene.test.mjs    # remembered case layout
+node tests/js/slab.test.mjs     # label model on real labels
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)

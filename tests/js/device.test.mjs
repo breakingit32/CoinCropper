@@ -245,18 +245,25 @@ const seqBefore = await page.evaluate(() => Object.fromEntries([...window.__coin
 // All three in one view once (so the app learns how they sit relative to each other)...
 await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) },
              { raw: "72686402401136", corners: rect(200, 1190, 420, 50) }], [...pcgsLines, ...textOnly]);
-// ...then only the NGC barcode is readable.
-await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) }]);
-const pcgsBefore = await page.evaluate(() => ({ ...window.__coincropper.tracks.get("2401136").slab }));
+// ...then only the two barcodes are readable (no label text): the text-only
+// slab is placed from memory and follows the camera.
+const twoBars = (dx, dy) => [{ raw: "6521437-005", corners: rect(100 + dx, 600 + dy, 400, 80) },
+                             { raw: "72686402401136", corners: rect(200 + dx, 1190 + dy, 420, 50) }];
+await frame(twoBars(0, 0));
+await page.waitForFunction(() => window.__coincropper.tracks.get("47966447")?.live === false);
+const textBefore = await page.evaluate(() => ({ ...window.__coincropper.tracks.get("47966447").slab }));
 for (let i = 0; i < 6; i++)   // camera moved: +60,-80 px = +30,-40 CSS (smoothing settles over a few frames)
-  await frame([{ raw: "6521437-005", corners: rect(160, 520, 400, 80) }]);
+  await frame(twoBars(60, -80));
 const mem = await page.evaluate(() => {
   const t = window.__coincropper.tracks;
   return { pcgs: t.get("2401136"), text: t.get("47966447"), ngc: t.get("6521437-005") };
 });
-check(mem.pcgs && mem.pcgs.live === false && mem.text && mem.ngc.live === true, "unread slabs keep cards from the remembered layout");
-const dx = mem.pcgs.slab.cx - pcgsBefore.cx, dy = mem.pcgs.slab.cy - pcgsBefore.cy;
+check(mem.text && mem.text.live === false && mem.ngc.live === true && mem.pcgs.live === true, "unread slab keeps its card from the remembered layout");
+const dx = mem.text.slab.cx - textBefore.cx, dy = mem.text.slab.cy - textBefore.cy;
 check(Math.abs(dx - 30) < 2 && Math.abs(dy + 40) < 2, `remembered card moves with the camera (${dx.toFixed(1)}, ${dy.toFixed(1)})`);
+await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) }]);   // one slab alone...
+await page.waitForTimeout(50);
+check(await page.evaluate(() => window.__coincropper.tracks.get("47966447")?.lastSeen < performance.now() - 30), "...doesn't place the others (too rough a guess)");
 // e) Seen again: no new lookups.
 await frame([{ raw: "72686402401136", corners: rect(260, 1110, 420, 50) }], pcgsLines.map((l) => ({ ...l, corners: l.corners.map(([x, y]) => [x + 60, y - 80]) })));
 await frame([], textOnly);

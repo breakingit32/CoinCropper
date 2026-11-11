@@ -40,33 +40,44 @@ r = m.update(onScreen(cam2, ["C01", "C10", "C11"]), t += 100);
 const c11 = m.slabs.get("C11");
 check(c11 && near(c11.world.cx, CASE[5].pose.cx, 3) && near(c11.world.cy, CASE[5].pose.cy, 3), "new slab mapped into the case frame");
 
-// 4. Single-slab view still localises (scale + rotation from that slab).
+// 4. One slab alone is too rough to place the others: only it is shown.
 const cam3 = cam(0.9, -8, 200, 100);
 r = m.update(onScreen(cam3, ["C11"]), t += 100);
+check(r.visible.length === 1 && r.visible[0].key === "C11" && r.visible[0].live, "single recognised slab: others hidden, not guessed");
+// Two agreeing slabs pin the camera down: the rest are placed.
+r = m.update(onScreen(cam3, ["C10", "C11"]), t += 100);
 const c01 = r.visible.find((v) => v.key === "C01"), tr = poseTo(cam3, CASE[1].pose);
-check(c01 && near(c01.slab.cx, tr.cx, 4) && near(c01.slab.cy, tr.cy, 4), "one recognised slab is enough to place the rest");
+check(c01 && !c01.live && near(c01.slab.cx, tr.cx, 4) && near(c01.slab.cy, tr.cy, 4), "two recognised slabs place the rest");
 
 // 5. Text-only (unconfirmed) read needs two sightings; a misread at a known spot aliases.
 const mis = { key: "C01-MISREAD", slab: poseTo(cam3, CASE[1].pose), sure: false };
-r = m.update([...onScreen(cam3, ["C11"]), mis], t += 100);
+r = m.update([...onScreen(cam3, ["C10", "C11"]), mis], t += 100);
 check(!m.slabs.has("C01-MISREAD"), "single text read not accepted yet");
-r = m.update([...onScreen(cam3, ["C11"]), mis], t += 100);
+r = m.update([...onScreen(cam3, ["C10", "C11"]), mis], t += 100);
 check(!m.slabs.has("C01-MISREAD") && m.resolve("C01-MISREAD") === "C01", "misread at a known slab's spot becomes that slab");
 const newText = onScreen(cam3, ["C12"], { sure: false });
-m.update([...onScreen(cam3, ["C11"]), ...newText], t += 100);
-m.update([...onScreen(cam3, ["C11"]), ...newText], t += 100);
+m.update([...onScreen(cam3, ["C10", "C11"]), ...newText], t += 100);
+m.update([...onScreen(cam3, ["C10", "C11"]), ...newText], t += 100);
 check(m.slabs.has("C12"), "new slab read twice from text is accepted");
 
 // 6. Separate island, then merge when both are in view.
 const m2 = new SceneMap({ smooth: 1, holdMs: 0 });
 m2.update(onScreen(cam(1, 0, 0, 0), ["C00", "C01"]), 1000);
-m2.update(onScreen(cam(1, 0, -900, 0), ["C03"]), 5000);           // far away, nothing known in view
+m2.update(onScreen(cam(1, 0, -900, 0), ["C03", "C13"]), 5000);   // far away, nothing known in view
 check(new Set([...m2.slabs.values()].map((s) => s.island)).size === 2, "slab seen with nothing known starts a new island");
 const camM = cam(0.8, 3, 10, 5);
-r = m2.update(onScreen(camM, ["C01", "C03"]), 9000);
+r = m2.update(onScreen(camM, ["C01", "C03"]), 8000);
+check(new Set([...m2.slabs.values()].map((s) => s.island)).size === 2, "one match per island isn't enough to join them");
+r = m2.update(onScreen(camM, ["C00", "C01", "C03", "C13"]), 9000);
 check(new Set([...m2.slabs.values()].map((s) => s.island)).size === 1, "islands merge when seen together");
 const c00b = r.visible.find((v) => v.key === "C00"), t00 = poseTo(camM, CASE[0].pose);
 check(c00b && near(c00b.slab.cx, t00.cx, 3) && near(c00b.slab.cy, t00.cy, 3), "merged map places every slab");
+
+// 6b. Two different reads at the same spot in one frame are one slab.
+const m4 = new SceneMap({ smooth: 1 });
+const sp = poseTo(cam(1, 0, 0, 0), CASE[0].pose);
+r = m4.update([{ key: "BARCODE-X", slab: sp, sure: true }, { key: "CERT-X", slab: { ...sp, cx: sp.cx + 10 }, sure: true }], 100);
+check(m4.size() === 1 && r.visible.length === 1, "same spot, two keys in one frame: one slab");
 
 // 7. Outlier: one detection on the wrong slab doesn't drag the rest.
 const m3 = new SceneMap({ smooth: 1 });

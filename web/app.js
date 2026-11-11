@@ -231,11 +231,12 @@ async function lookup(key, extra = {}) {
   if (openCode === key) renderSheet();
 }
 
+// "1807 50C · AU53": what the coin is first, then the grade.
 function coinTitle(coin) {
   const c = coin.result?.coin;
-  if (!c) return coin.code;
-  const head = [c.service, c.grade].filter(Boolean).join(" ");
-  return [head, c.description || (c.cert && `#${c.cert}`)].filter(Boolean).join(" · ");
+  if (!c) return coin.code || "Reading…";
+  const what = c.description || [c.year, c.mint_mark].filter(Boolean).join("-") || (c.cert && `${c.service || ""} #${c.cert}`.trim());
+  return [what, c.grade].filter(Boolean).join(" · ");
 }
 
 // ---------------------------------------------------------------- scanning
@@ -373,7 +374,12 @@ export function handleFrame(ev) {
     if (sl.cx < -sl.w || sl.cx > W + sl.w || sl.cy < -sl.h || sl.cy > H + sl.h) continue;   // off screen
     let t = tracks.get(v.key);
     if (!t) { t = { key: v.key, el: null }; tracks.set(v.key, t); }
-    t.slab = sl;
+    if (v.live && t.slab && t.live) {   // steady live outlines a little between frames
+      const a = 0.5;
+      for (const k of ["cx", "cy", "w", "h"]) t.slab[k] += (sl[k] - t.slab[k]) * a;
+      let d = sl.angle - t.slab.angle; d = Math.atan2(Math.sin(d), Math.cos(d));
+      t.slab.angle += d * a;
+    } else t.slab = { ...sl };
     t.live = v.live;
     t.lastSeen = now;
   }
@@ -416,7 +422,9 @@ function renderTags() {
   const now = performance.now();
   for (const [code, t] of tracks) {
     const age = now - t.lastSeen;
-    if (!paused && age > TRACK_TTL_MS) { t.el?.remove(); tracks.delete(code); continue; }
+    // Android: slabs not placed this frame go quickly rather than linger at a stale spot.
+    const ttl = nativeCam ? (t.live ? 600 : 250) : TRACK_TTL_MS;
+    if (!paused && age > ttl) { t.el?.remove(); tracks.delete(code); continue; }
     if (!t.el) {
       t.el = document.createElement("div");
       t.el.className = "tag";
@@ -436,10 +444,13 @@ function renderTags() {
       const d = sl.h * 0.14;
       const px = sl.cx - Math.sin(sl.angle) * d, py = sl.cy + Math.cos(sl.angle) * d;
       card.classList.add("oncoin");
-      Object.assign(card.style, {
-        left: Math.min(Math.max(px, cw / 2 + 6), overlay.clientWidth - cw / 2 - 6) + "px",
-        top: Math.min(Math.max(py, chh / 2 + 56), overlay.clientHeight - chh / 2 - 90) + "px",
-        maxWidth: Math.max(120, sl.w * 0.95) + "px" });
+      // Card scales with the slab so neighbouring cards don't run into each other.
+      const k = Math.max(0.55, Math.min(1, sl.w / 300));
+      const left = Math.min(Math.max(px, (cw * k) / 2 + 6), overlay.clientWidth - (cw * k) / 2 - 6);
+      const top = Math.min(Math.max(py, (chh * k) / 2 + 56), overlay.clientHeight - (chh * k) / 2 - 90);
+      Object.assign(card.style, { left: left + "px", top: top + "px", maxWidth: Math.max(110, sl.w * 0.92 / k) + "px" });
+      card.style.setProperty("--k", k.toFixed(3));
+      t.cardRect = { x: left - (cw * k) / 2, y: top - (chh * k) / 2, w: cw * k, h: chh * k };
     } else {
       const s = toScreen(t.box);
       Object.assign(box.style, { left: s.x + "px", top: s.y + "px", width: s.w + "px", height: s.h + "px" });
@@ -476,7 +487,21 @@ function renderTags() {
   }
 }
 
-function frame() { renderTags(); requestAnimationFrame(frame); }
+// Cards of slabs read in this frame win; a remembered card that would cover
+// another card is hidden.
+function declutter() {
+  const placed = [];
+  const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const list = [...tracks.values()].filter((t) => t.el && t.cardRect)
+    .sort((p, q) => (q.live ? 1 : 0) - (p.live ? 1 : 0));
+  for (const t of list) {
+    const hide = !t.live && placed.some((r) => hit(r, t.cardRect));
+    t.el.lastChild.style.visibility = hide ? "hidden" : "";
+    if (!hide) placed.push(t.cardRect);
+  }
+}
+
+function frame() { renderTags(); declutter(); requestAnimationFrame(frame); }
 
 // ---------------------------------------------------------------- sheets
 
@@ -586,15 +611,21 @@ function loadCoins() {
 
 function updateCase() {
   saveCoins();
-  const list = [...coins.entries()];
+  // The case = coins seen since the app opened; earlier scans stay remembered
+  // (so they're not looked up again) but aren't counted.
+  const all = [...coins.entries()];
+  const list = all.filter(([, c]) => !c.saved || (c.lastSeen && c.lastSeen >= startedAt));
+  const remembered = all.length - list.length;
   const total = list.reduce((s, [, c]) => s + (coinValue(c) || 0), 0);
   const guide = list.reduce((s, [, c]) => s + (guideValue(c) || 0), 0);
   const greyT = list.reduce((s, [, c]) => s + (greyOf(c) || 0), 0);
   $("caseCount").textContent = list.length;
-  $("caseTotal").textContent = money(total || greyT || guide);
-  const session = list.filter(([, c]) => !c.saved || (c.lastSeen && c.lastSeen > startedAt)).length;
-  $("caseSub").textContent = `${list.length} coins (${session} seen now) · total high bid ${money(total)}` +
-    (greyT ? ` · Greysheet ${money(greyT)}` : "") + (guide ? ` · PCGS guide ${money(guide)}` : "");
+  // Headline: each coin's best value (CCE bid, else Greysheet, else PCGS guide).
+  const best = list.reduce((s, [, c]) => s + (coinValue(c) ?? greyOf(c) ?? guideValue(c) ?? 0), 0);
+  $("caseTotal").textContent = money(best);
+  $("caseSub").textContent = `${list.length} coins this session · CCE bids ${money(total)}` +
+    (greyT ? ` · Greysheet ${money(greyT)}` : "") + (guide ? ` · PCGS guide ${money(guide)}` : "") +
+    (remembered ? ` · ${remembered} more remembered from earlier` : "");
   $("caseList").innerHTML = list.map(([key, c]) => `<li data-code="${esc(key)}">
       <span>${esc(coinTitle(c))}${c.result?.grading?.cac ? ` <small class="cac-${esc(c.result.grading.cac.toLowerCase())}">CAC</small>` : ""}</span>
       <span class="p">${esc(coinValue(c) != null ? money(coinValue(c)) : greyOf(c) != null ? "Grey " + money(greyOf(c))
@@ -714,7 +745,7 @@ $("clearBtn").onclick = () => {
 };
 $("exportBtn").onclick = async () => {
   const rows = [["service", "cert", "pcgs_no", "grade", "description", "cac", "high_bid", "low_ask", "greysheet", "cpg_retail", "pcgs_guide"]];
-  for (const c of coins.values()) {
+  for (const c of [...coins.values()].filter((c) => !c.saved || (c.lastSeen && c.lastSeen >= startedAt))) {
     const k = c.result?.coin || {}, b = c.result?.bids || {}, g = c.result?.grading || {}, gs = c.result?.greysheet || {};
     rows.push([k.service, k.cert, k.pcgs_no, k.grade, k.description, g.cac, b.high_bid, b.low_ask, greyValue(gs), gs.cpg, g.price_guide]);
   }

@@ -1,0 +1,33 @@
+// node tests/js/slab.test.mjs — label model on real labels (positions read off a
+// phone screenshot of a PCGS case; screen px). Locks the slab-size calibration.
+import { readSlabs } from "../../web/slab.js";
+
+let failed = 0;
+const check = (ok, msg) => { console.log((ok ? "ok   " : "FAIL ") + msg); if (!ok) failed++; };
+const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+
+const CASES = [
+  { name: "1807 50C AU53 (modern PCGS)", real: [160, 1085, 470, 1530], fields: { year: "1807", denomination: "50C", grade: "AU53" },
+    lines: [["1807", 210, 1118, 245, 1132], ["50C", 400, 1118, 430, 1132], ["PCGS AU53", 288, 1137, 390, 1152],
+            ["Draped Bust", 305, 1158, 385, 1170], ["6079.53/54253891", 270, 1192, 400, 1206]] },
+  { name: "1921 25C MS63 (modern PCGS)", real: [175, 268, 480, 650], fields: { year: "1921", denomination: "25C", grade: "MS63" },
+    lines: [["1921", 235, 300, 270, 315], ["25C", 395, 300, 425, 315], ["PCGS MS63", 305, 318, 395, 333],
+            ["5740.63/53977760", 285, 365, 410, 377]] },
+  { name: "1795 50C VG8 (old green holder)", real: [495, 655, 800, 1060], fields: { denomination: "50C", grade: "VG8" },
+    lines: [["PCGS", 620, 692, 670, 702], ["VG08", 620, 722, 670, 738], ["50C", 715, 705, 750, 720],
+            ["6052.08/7454263", 595, 757, 705, 770]] },
+];
+
+for (const c of CASES) {
+  const r = readSlabs(c.lines.map(([text, ...b]) => ({ text, corners: R(...b) })), []);
+  const s = r.slabs[0];
+  for (const [k, v] of Object.entries(c.fields)) check(s.fields[k] === v, `${c.name}: ${k} = ${s.fields[k]}`);
+  const [x0, y0, x1, y1] = c.real, rw = x1 - x0, rh = y1 - y0;
+  const ox0 = s.slab.cx - s.slab.w / 2, ox1 = s.slab.cx + s.slab.w / 2, oy0 = s.slab.cy - s.slab.h / 2;
+  // centre within 10% of the slab width, width within 25%, top within 8% of height
+  check(Math.abs((ox0 + ox1) / 2 - (x0 + x1) / 2) < 0.1 * rw, `${c.name}: centred (${Math.round((ox0 + ox1) / 2)} vs ${(x0 + x1) / 2})`);
+  check(Math.abs(s.slab.w - rw) < 0.25 * rw, `${c.name}: width ${Math.round(s.slab.w)} vs ${rw}`);
+  check(Math.abs(oy0 - y0) < 0.08 * rh, `${c.name}: top ${Math.round(oy0)} vs ${y0}`);
+}
+console.log(failed ? `\n${failed} failed` : "\nall passed");
+process.exit(failed ? 1 : 0);
