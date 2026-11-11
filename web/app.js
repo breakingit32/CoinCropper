@@ -19,6 +19,7 @@ let detector = null;        // {detect(video) -> [{rawValue, box:{x,y,w,h}}]}
 let paused = false;
 let stream = null;
 let openCode = null;
+let nativeCam = false;      // Android app: Google ML Kit scanner draws the camera behind the page
 
 // Website: lookups go to the CoinCropper server that served the page.
 // Android app: lookups run on the phone (device.js signs in to CCE directly),
@@ -67,6 +68,7 @@ function loadScript(src) {
 
 // Map a box in video-pixel space onto the screen (video uses object-fit: cover).
 function toScreen(b) {
+  if (nativeCam) return b;   // ML Kit boxes are already in screen (CSS) pixels
   const vw = video.videoWidth, vh = video.videoHeight;
   const cw = video.clientWidth, ch = video.clientHeight;
   const s = Math.max(cw / vw, ch / vh);
@@ -219,28 +221,70 @@ function coinTitle(coin) {
 
 // ---------------------------------------------------------------- scanning
 
+function ingest(found) {
+  const now = performance.now();
+  for (const f of found) {
+    const code = f.rawValue?.trim();
+    if (!code) continue;
+    let t = tracks.get(code);
+    if (!t) {
+      t = { box: { ...f.box }, lastSeen: now, el: null };
+      tracks.set(code, t);
+      if (!coins.has(code)) lookup(code);
+    } else {   // smooth jitter
+      const a = 0.55;
+      for (const k of ["x", "y", "w", "h"]) t.box[k] += (f.box[k] - t.box[k]) * a;
+    }
+    t.raw = { ...f.box };
+    t.lastSeen = now;
+  }
+}
+
+// Android app: Google's ML Kit scanner (via @capacitor-mlkit/barcode-scanning).
+// Far better than ZXing on small, dense or slightly blurry slab barcodes, reads
+// many at once, and runs the camera's own autofocus.  The camera preview is a
+// native view behind the (transparent) page.
+const ML_FORMATS = ["CODE_128", "QR_CODE", "CODE_39", "DATA_MATRIX", "PDF_417", "ITF", "CODE_93"];
+async function startNativeScanner() {
+  const cap = window.Capacitor;
+  if (!NATIVE || !cap?.nativePromise || !cap.addListener) return false;
+  try {
+    const { supported } = await cap.nativePromise("BarcodeScanner", "isSupported", {});
+    if (!supported) return false;
+  } catch { return false; }   // plugin not in this build
+  cap.addListener("BarcodeScanner", "barcodesScanned", (ev) => {
+    if (paused) return;
+    const dpr = window.devicePixelRatio || 1;
+    ingest((ev?.barcodes || []).filter((b) => b.cornerPoints?.length).map((b) => {
+      const xs = b.cornerPoints.map((p) => p[0] / dpr), ys = b.cornerPoints.map((p) => p[1] / dpr);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      return { rawValue: b.rawValue || b.displayValue, box: { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y } };
+    }));
+  });
+  document.documentElement.classList.add("native-cam");
+  try {
+    await cap.nativePromise("BarcodeScanner", "startScan", { formats: ML_FORMATS, lensFacing: "BACK", resolution: 2 });
+  } catch (e) {
+    document.documentElement.classList.remove("native-cam");
+    $("startErr").hidden = false;
+    $("startErr").textContent = `Camera unavailable: ${e.message || e}`;
+    throw e;
+  }
+  nativeCam = true;
+  try {
+    const { available } = await cap.nativePromise("BarcodeScanner", "isTorchAvailable", {});
+    $("torchBtn").hidden = !available;
+  } catch { /* optional */ }
+  $("ocrBtn").hidden = true;   // no camera frames to read text from in this mode
+  return true;
+}
+
 async function scanLoop() {
   while (stream) {
     const t0 = performance.now();
     if (!paused && video.readyState >= 2) {
       try {
-        const found = await detector.detect(video);
-        const now = performance.now();
-        for (const f of found) {
-          const code = f.rawValue?.trim();
-          if (!code) continue;
-          let t = tracks.get(code);
-          if (!t) {
-            t = { box: f.box, lastSeen: now, el: null };
-            tracks.set(code, t);
-            if (!coins.has(code)) lookup(code);
-          } else {   // smooth jitter
-            const a = 0.55;
-            for (const k of ["x", "y", "w", "h"]) t.box[k] += (f.box[k] - t.box[k]) * a;
-          }
-          t.raw = { ...f.box };
-          t.lastSeen = now;
-        }
+        ingest(await detector.detect(video));
       } catch (e) { console.warn(e); }
     }
     await new Promise((r) => setTimeout(r, Math.max(0, SCAN_INTERVAL_MS - (performance.now() - t0))));
@@ -322,7 +366,7 @@ function renderSheet() {
   $("cceLink").href = res.cce_url || "https://www.certifiedcoinexchange.com";
   $("verifyLink").hidden = !res.verify_url;
   if (res.verify_url) $("verifyLink").href = res.verify_url;
-  const notes = [...(c.notes || [])];
+  const notes = [...(c.notes || []), `Barcode: ${coin.code}`];
   if (b.source === "mock") notes.unshift("Demo prices — connect your CCE account on the server for live bids.");
   $("dNotes").textContent = notes.join(" · ");
 }
@@ -378,6 +422,14 @@ async function ocrLabel() {
 async function start() {
   $("startErr").hidden = true;
   try {
+    if (await startNativeScanner()) {
+      console.info("barcode engine: mlkit");
+      $("start").hidden = true;
+      $("controls").hidden = false;
+      return;
+    }
+  } catch { return; }
+  try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
@@ -409,14 +461,17 @@ async function start() {
 $("startBtn").onclick = start;
 $("pauseBtn").onclick = () => {
   paused = !paused;
-  paused ? video.pause() : video.play();
+  if (!nativeCam) paused ? video.pause() : video.play();
   $("pauseBtn").classList.toggle("on", paused);
   $("pauseBtn").textContent = paused ? "▶" : "❚❚";
 };
 let torchOn = false;
 $("torchBtn").onclick = async () => {
   torchOn = !torchOn;
-  try { await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: torchOn }] }); } catch {}
+  try {
+    if (nativeCam) await window.Capacitor.nativePromise("BarcodeScanner", torchOn ? "enableTorch" : "disableTorch", {});
+    else await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ torch: torchOn }] });
+  } catch {}
   $("torchBtn").classList.toggle("on", torchOn);
 };
 $("caseBtn").onclick = () => { $("sheet").hidden = true; openCode = null; updateCase(); $("caseSheet").hidden = false; };

@@ -15,7 +15,7 @@ let failed = 0;
 const check = (ok, msg) => { console.log((ok ? "ok   " : "FAIL ") + msg); if (!ok) failed++; };
 
 const browser = await chromium.launch();
-const page = await browser.newPage();
+const page = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
 page.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
 await page.addInitScript(() => {
   // Fake CCE: login form, session cookie, a member bid page.
@@ -30,9 +30,17 @@ await page.addInitScript(() => {
   const log = (window.__cceLog = []);
   let session = false;
   window.__cceExpire = () => { session = false; };
+  window.__scan = { listeners: [], calls: [] };
   window.Capacitor = {
     isNativePlatform: () => true,
+    addListener: (plugin, event, cb) => { window.__scan.listeners.push({ plugin, event, cb }); return { remove() {} }; },
     nativePromise: async (plugin, method, o) => {
+      if (plugin === "BarcodeScanner") {
+        window.__scan.calls.push({ method, o });
+        if (method === "isSupported") return { supported: true };
+        if (method === "isTorchAvailable") return { available: true };
+        return {};
+      }
       log.push({ plugin, method: o.method, url: o.url, data: o.data, dataType: o.dataType });
       const u = new URL(o.url);
       if (u.pathname === "/Account/Login" && o.method === "GET") return { status: 200, data: LOGIN, headers: {} };
@@ -101,6 +109,29 @@ r = await page.evaluate(async () => {
 }).catch((e) => ({ error: e.message }));
 const after = await page.evaluate(() => window.__cceLog.filter((l) => l.method === "POST").length);
 check(r.high_bid === 1250 && after === before + 1, "re-login when CCE says signed out");
+
+// 6. Camera: ML Kit scanner path (Android app).
+await page.click("[data-close=settingsSheet]");
+await page.click("#startBtn");
+await page.waitForFunction(() => document.documentElement.classList.contains("native-cam"));
+const start = await page.evaluate(() => window.__scan.calls.find((c) => c.method === "startScan"));
+check(start && start.o.formats.includes("CODE_128") && start.o.resolution === 2, "starts ML Kit scan (Code 128, 1080p)");
+check(await page.isVisible("#controls") && !(await page.isVisible("#start")), "camera controls shown");
+check(await page.isVisible("#torchBtn"), "flashlight button shown");
+// Barcode in physical pixels; page has devicePixelRatio 2 -> CSS box 50,300 200x40.
+await page.evaluate(() => {
+  const l = window.__scan.listeners.find((x) => x.event === "barcodesScanned");
+  l.cb({ barcodes: [{ rawValue: "6521437-005", cornerPoints: [[100, 600], [500, 600], [500, 680], [100, 680]] }] });
+});
+await page.waitForFunction(() => window.__coincropper.coins.get("6521437-005")?.status);
+const tag = await page.evaluate(() => {
+  const b = window.__coincropper.tracks.get("6521437-005").el.querySelector(".box").style;
+  return { left: b.left, top: b.top, width: b.width, height: b.height };
+});
+check(tag.left === "50px" && tag.top === "300px" && tag.width === "200px" && tag.height === "40px",
+  `AR box placed from ML Kit corners (${JSON.stringify(tag)})`);
+const ngc = await page.evaluate(() => window.__coincropper.coins.get("6521437-005").result?.coin);
+check(ngc?.service === "NGC" && ngc?.cert === "6521437-005", "NGC cert recognised from scan");
 
 await browser.close();
 console.log(failed ? `\n${failed} failed` : "\nall passed");

@@ -111,3 +111,7 @@ summary { cursor: pointer; font-weight: 600; }
   color: var(--text); font-size: 15px; min-width: 0; }
 .settings details { margin: 0; }
 .settings details label { margin-top: 10px; }
+
+/* Android app with the native camera preview behind the page */
+html.native-cam, html.native-cam body, html.native-cam #stage { background: transparent; }
+html.native-cam #video { display: none; }
