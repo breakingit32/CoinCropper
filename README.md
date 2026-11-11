@@ -67,6 +67,16 @@ because browsers won't let one site read another site's pages.)
   identified from its label, e.g. PCGS's `7268.64/2401136` line (PCGS #,
   grade, cert) or an NGC cert like `6521437-005`, and a card appears on it.
   For coins read from text only, `{barcode}` sends the cert number.
+* **Remembers the case:** the app keeps a map of where each slab sits.
+  Every frame the slabs it recognises tell it how the camera moved, so cards
+  stay on slabs whose label or barcode can't be read in that frame (dashed
+  outline), and come straight back when you pan back. A cert read only from
+  text must be read the same way twice before it counts, and a misread that
+  lands on a known slab is treated as that slab.
+* **Each coin is looked up once:** scans are saved on the phone, so seeing a
+  coin again (even after restarting the app) doesn't look it up again; bids
+  older than 12 hours are refreshed once when the coin is seen. **Clear** in
+  the case list forgets everything.
 * Until CCE is set up it shows demo prices. Your login is stored only on the
   phone. Under **Advanced** you can still point the app at a server instead.
 
@@ -162,12 +172,14 @@ Never commit keys to the repository.
 pip install -r requirements.txt -r requirements-dev.txt
 pytest                          # server
 node tests/js/device.test.mjs   # app's on-device mode (needs Playwright)
+node tests/js/scene.test.mjs    # remembered case layout
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)
 * `server/grading.py`, `web/grading.js`: PCGS and CAC API lookups
 * `server/cce.py`: CCE login, bid-table parser, demo data
 * `web/slab.js`: label layout model (finds each slab's rectangle and fields)
+* `web/scene.js`: remembered case layout (camera motion from recognised slabs)
 * `server/main.py`: FastAPI app, serves `web/` and `/api/*`
 * `web/`: the phone app (plain HTML/JS, no build step); `web/core.js` and
   `web/device.js` are the on-device copies of the server logic used by the APK

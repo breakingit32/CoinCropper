@@ -181,6 +181,7 @@ const sl = await page.evaluate(() => window.__coincropper.tracks.get("6521437-00
 // Barcode is CSS 50..250 x 300..340: the slab must be wider, contain it near its top, and extend down.
 check(sl && sl.cx > 140 && sl.cx < 160 && sl.w > 300 && sl.cy - sl.h / 2 < 300 && sl.cy + sl.h / 2 > 600,
   `slab outline estimated from barcode (${sl && [sl.cx, sl.cy, sl.w, sl.h].map(Math.round)})`);
+await page.waitForFunction(() => window.__coincropper.tracks.get("6521437-005")?.el);
 const cls = await page.evaluate(() => window.__coincropper.tracks.get("6521437-005").el.querySelector(".box").className);
 check(cls.includes("slab"), "slab outline drawn");
 const ngc = await page.evaluate(() => window.__coincropper.coins.get("6521437-005").result?.coin);
@@ -206,17 +207,58 @@ await frame([{ raw: "72686402401136", corners: rect(200, 1190, 420, 50) }]);   /
 st = await page.evaluate(() => [...window.__coincropper.tracks.keys()]);
 check(!st.includes("72686402401136"), "later barcode-only frames stay on the same card");
 
-// c) Label text but no readable barcode.
-await frame([], [
+// c) Label text but no readable barcode: needs two matching reads.
+const textOnly = [
   { text: "1903-O", block: 5, corners: rect(60, 200, 150, 30) },
   { text: "PCGS MS67", block: 5, corners: rect(60, 235, 200, 30) },
   { text: "7286.67/47966447", block: 6, corners: rect(60, 270, 260, 30) },
-]);
+];
+await frame([], textOnly);
+check(!(await page.evaluate(() => window.__coincropper.coins.has("47966447"))), "one text-only read is not trusted yet");
+await frame([], textOnly);
 await waitCoin("47966447");
 const oc = await page.evaluate(() => window.__coincropper.coins.get("47966447"));
 check(oc.code === "" && oc.result.coin.grade === "MS67" && oc.result.coin.pcgs_no === "7286", "slab identified from label text alone");
 check(await page.evaluate(() => window.__coincropper.tracks.has("47966447")), "card shown for text-only slab");
 check(await page.evaluate(() => window.__coincropper.coins.size) === 7, "no duplicate coins (7 total incl. earlier lookups)");
+
+// d) Memory: camera pans; only the NGC barcode is read, the others keep their cards.
+const seqBefore = await page.evaluate(() => Object.fromEntries([...window.__coincropper.coins].map(([k, c]) => [k, c.seq || 0])));
+// All three in one view once (so the app learns how they sit relative to each other)...
+await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) },
+             { raw: "72686402401136", corners: rect(200, 1190, 420, 50) }], [...pcgsLines, ...textOnly]);
+// ...then only the NGC barcode is readable.
+await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) }]);
+const pcgsBefore = await page.evaluate(() => ({ ...window.__coincropper.tracks.get("2401136").slab }));
+for (let i = 0; i < 6; i++)   // camera moved: +60,-80 px = +30,-40 CSS (smoothing settles over a few frames)
+  await frame([{ raw: "6521437-005", corners: rect(160, 520, 400, 80) }]);
+const mem = await page.evaluate(() => {
+  const t = window.__coincropper.tracks;
+  return { pcgs: t.get("2401136"), text: t.get("47966447"), ngc: t.get("6521437-005") };
+});
+check(mem.pcgs && mem.pcgs.live === false && mem.text && mem.ngc.live === true, "unread slabs keep cards from the remembered layout");
+const dx = mem.pcgs.slab.cx - pcgsBefore.cx, dy = mem.pcgs.slab.cy - pcgsBefore.cy;
+check(Math.abs(dx - 30) < 2 && Math.abs(dy + 40) < 2, `remembered card moves with the camera (${dx.toFixed(1)}, ${dy.toFixed(1)})`);
+// e) Seen again: no new lookups.
+await frame([{ raw: "72686402401136", corners: rect(260, 1110, 420, 50) }], pcgsLines.map((l) => ({ ...l, corners: l.corners.map(([x, y]) => [x + 60, y - 80]) })));
+await frame([], textOnly);
+await page.waitForTimeout(300);
+const seqAfter = await page.evaluate(() => Object.fromEntries([...window.__coincropper.coins].map(([k, c]) => [k, c.seq || 0])));
+check(JSON.stringify(seqAfter) === JSON.stringify(seqBefore), "coins already scanned are not looked up again");
+check(await page.evaluate(() => window.__coincropper.coins.size) === 7, "still 7 coins after rescanning");
+
+// f) Restart: past scans come back from the phone, without new lookups.
+await page.waitForTimeout(700);   // let the save run
+await page.reload();
+await page.waitForFunction(() => window.__coincropper?.coins);
+const back = await page.evaluate(() => ({ n: window.__coincropper.coins.size, c: window.__coincropper.coins.get("2401136") }));
+check(back.n >= 5 && back.c?.result?.coin?.pcgs_no === "7268", `past scans restored after restart (${back.n})`);
+await page.click("#startBtn");
+await page.waitForFunction(() => document.documentElement.classList.contains("native-cam"));
+await frame([{ raw: "72686402401136", corners: rect(200, 1190, 420, 50) }]);
+await page.waitForTimeout(300);
+const again = await page.evaluate(() => window.__coincropper.coins.get("2401136"));
+check(!again.seq && again.status === "ok", "restored coin seen again: no lookup");
 
 // 8. Label layout model on a real label (positions from a phone screenshot, CSS px).
 const lab = await page.evaluate(async () => {

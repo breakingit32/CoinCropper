@@ -137,3 +137,6 @@ html.native-cam #video { display: none; }
   color: var(--text); font: 12px/1.4 ui-monospace, monospace; resize: vertical; }
 
 .quotes tr.other td { opacity: .55; }
+
+/* Slab placed from the remembered case layout (not read in this frame) */
+.tag.remembered .box.slab { border-style: dashed; border-color: #e8b64c88; background: transparent; }

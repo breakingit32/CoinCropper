@@ -3,6 +3,7 @@
 import { makeDeviceBackend } from "./device.js";
 import { readSlabs, slabFromBarcode } from "./slab.js";
 import { parseKeysFile } from "./grading.js";
+import { SceneMap } from "./scene.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
@@ -213,6 +214,7 @@ async function lookup(key, extra = {}) {
     coin.result = result;
     coin.status = result.bids.error ? "error" : "ok";
     coin.error = result.bids.error;
+    coin.at = Date.now();
   } catch (e) {
     if (seq !== coin.seq) return;
     coin.status = "error"; coin.error = e.message;
@@ -262,22 +264,34 @@ function ingest(found) {
     if (f.box) t.raw = { ...f.box };
     if (f.rel) t.rel = f.rel;
     t.lastSeen = now;
-
-    let coin = coins.get(key), changed = false;
-    if (!coin) {
-      coin = { code: f.code || "", overrides: {} };
-      coins.set(key, coin);
-      changed = true;
-    }
-    if (f.code && !coin.code) { coin.code = f.code; changed = true; }
-    // Use the first label reading, and again once one has year + grade.
-    if (f.ocr && (!coin.overrides.ocr_text || (f.complete && !coin.ocrComplete))) {
-      coin.overrides.ocr_text = f.ocr;
-      coin.ocrComplete = !!f.complete;
-      changed = true;
-    }
-    if (changed) lookup(key);
+    updateCoin(key, f);
   }
+}
+
+// New information about a coin from the camera. Looks it up only when there is
+// something new to look up with: a coin seen before (this session or a past
+// one) is not looked up again.
+const REFRESH_BIDS_MS = 12 * 3600 * 1000;
+function updateCoin(key, f) {
+  let coin = coins.get(key), changed = false;
+  if (!coin) {
+    coin = { code: f.code || "", overrides: {} };
+    coins.set(key, coin);
+    changed = true;
+  }
+  coin.lastSeen = Date.now();
+  const identified = !!coin.result?.grading?.name;   // grading service already knows it
+  if (f.code && !coin.code) { coin.code = f.code; changed = !identified || changed; }
+  // Use the first label reading, and again once one has year + grade —
+  // unless the grading service has already identified the coin.
+  if (!identified && f.ocr && (!coin.overrides.ocr_text || (f.complete && !coin.ocrComplete))) {
+    coin.overrides.ocr_text = f.ocr;
+    coin.ocrComplete = !!f.complete;
+    changed = true;
+  }
+  // Bids from an earlier session go stale: refresh once when seen again.
+  if (!changed && coin.status === "ok" && coin.at && Date.now() - coin.at > REFRESH_BIDS_MS) changed = true;
+  if (changed && coin.status !== "loading") lookup(key);
 }
 
 // Once label text ties a barcode to a cert number, the barcode's track and coin
@@ -286,6 +300,8 @@ const aliases = new Map();   // barcode value -> cert
 function linkBarcode(raw, cert) {
   if (aliases.get(raw) === cert) return;
   aliases.set(raw, cert);
+  scene.rename(raw, cert);
+  if (rels.has(raw) && !rels.has(cert)) rels.set(cert, rels.get(raw));
   const oldT = tracks.get(raw), oldC = coins.get(raw);
   if (oldT) {
     if (!tracks.has(cert)) { oldT.key = cert; tracks.set(cert, oldT); } else oldT.el?.remove();
@@ -312,25 +328,47 @@ function frameMapper(ev) {
   const ox = (v.x || 0) + (vw - ev.width * s) / 2, oy = (v.y || 0) + (vh - ev.height * s) / 2;
   return (corners) => corners.map((p) => [(p[0] * s + ox) / dpr, (p[1] * s + oy) / dpr]);
 }
+// Remembered layout of the case (see scene.js) and, per slab, where the slab
+// sits relative to its barcode (learned when label and barcode are seen together).
+const scene = new SceneMap();
+const rels = new Map();
+
 export function handleFrame(ev) {
   if (paused || !ev?.width) return;
   const map = frameMapper(ev);
   let bars = (ev.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: map(b.corners) }));
-  const found = [];
+  const dets = [];
   if (ev.lines) {
     const lines = ev.lines.map((l) => ({ text: l.text, corners: map(l.corners) }));
     const { slabs, loose } = readSlabs(lines, bars);
     for (const sl of slabs) {
       if (sl.code) linkBarcode(sl.code, sl.cert);
-      found.push({ key: sl.cert, slab: sl.slab, code: sl.code, ocr: sl.ocr, complete: sl.complete, rel: sl.rel });
+      if (sl.rel) rels.set(sl.cert, sl.rel);
+      dets.push({ key: sl.cert, slab: sl.slab, sure: !!sl.code, code: sl.code, ocr: sl.ocr, complete: sl.complete });
     }
     bars = loose;
   }
   for (const b of bars) {
     const key = aliases.get(b.raw) || b.raw;
-    found.push({ key, code: b.raw, slab: slabFromBarcode(b.corners, tracks.get(key)?.rel) });
+    dets.push({ key, slab: slabFromBarcode(b.corners, rels.get(key)), sure: true, code: b.raw });
   }
-  ingest(found);
+
+  const { visible, accepted } = scene.update(dets);
+  for (const d of dets) {
+    const key = scene.resolve(d.key);
+    if (accepted.has(key)) updateCoin(key, d);
+  }
+  const now = performance.now(), W = innerWidth, H = innerHeight;
+  for (const v of visible) {
+    if (!coins.has(v.key)) continue;
+    const sl = v.slab;
+    if (sl.cx < -sl.w || sl.cx > W + sl.w || sl.cy < -sl.h || sl.cy > H + sl.h) continue;   // off screen
+    let t = tracks.get(v.key);
+    if (!t) { t = { key: v.key, el: null }; tracks.set(v.key, t); }
+    t.slab = sl;
+    t.live = v.live;
+    t.lastSeen = now;
+  }
 }
 
 async function startNativeScanner() {
@@ -405,6 +443,7 @@ function renderTags() {
       Object.assign(card.style, { left: cx + "px", top: (below ? s.y + s.h + 10 : s.y - 10) + "px" });
     }
     t.el.classList.toggle("stale", !paused && age > 400);
+    t.el.classList.toggle("remembered", t.live === false);
     t.el.classList.toggle("loading", coin.status === "loading");
     t.el.classList.toggle("error", coin.status === "error");
     const t1 = card.firstChild, t2 = card.lastChild;
@@ -493,13 +532,35 @@ function renderGrading(g) {
 const coinValue = (c) => c.result?.bids?.high_bid ?? null;
 const guideValue = (c) => c.result?.grading?.price_guide ?? null;
 
+// Past scans are kept on the phone so coins aren't looked up again next time.
+const SAVED_KEY = "coins:v1", SAVED_MAX = 500;
+let saveTimer = null;
+function saveCoins() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    const done = [...coins.entries()].filter(([, c]) => c.status === "ok" && c.result)
+      .sort((a, b) => (b[1].lastSeen || 0) - (a[1].lastSeen || 0)).slice(0, SAVED_MAX)
+      .map(([k, c]) => [k, { code: c.code, overrides: c.overrides, result: c.result, at: c.at, lastSeen: c.lastSeen }]);
+    try { localStorage.setItem(SAVED_KEY, JSON.stringify({ coins: done, aliases: [...aliases] })); } catch { /* full */ }
+  }, 500);
+}
+function loadCoins() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVED_KEY) || "null");
+    for (const [k, c] of saved?.coins || []) coins.set(k, { ...c, status: "ok", saved: true });
+    for (const [a, b] of saved?.aliases || []) aliases.set(a, b);
+  } catch { /* nothing saved */ }
+}
+
 function updateCase() {
+  saveCoins();
   const list = [...coins.entries()];
   const total = list.reduce((s, [, c]) => s + (coinValue(c) || 0), 0);
   const guide = list.reduce((s, [, c]) => s + (guideValue(c) || 0), 0);
   $("caseCount").textContent = list.length;
   $("caseTotal").textContent = money(total || guide);
-  $("caseSub").textContent = `${list.length} coins · total high bid ${money(total)}` +
+  const session = list.filter(([, c]) => !c.saved || (c.lastSeen && c.lastSeen > startedAt)).length;
+  $("caseSub").textContent = `${list.length} coins (${session} seen now) · total high bid ${money(total)}` +
     (guide ? ` · PCGS guide ${money(guide)}` : "");
   $("caseList").innerHTML = list.map(([key, c]) => `<li data-code="${esc(key)}">
       <span>${esc(coinTitle(c))}${c.result?.grading?.cac ? ` <small class="cac-${esc(c.result.grading.cac.toLowerCase())}">CAC</small>` : ""}</span>
@@ -613,6 +674,8 @@ $("editForm").onsubmit = (e) => {
 $("ocrBtn").onclick = ocrLabel;
 $("clearBtn").onclick = () => {
   coins.clear(); for (const t of tracks.values()) t.el?.remove(); tracks.clear();
+  scene.forget(); rels.clear(); aliases.clear();
+  try { localStorage.removeItem(SAVED_KEY); } catch { /* ignore */ }
   updateCase();
 };
 $("exportBtn").onclick = async () => {
@@ -716,8 +779,11 @@ $("testLogin").onclick = async () => {
   try { await device.testLogin(); st.textContent = "✓ Signed in to CCE."; }
   catch (e) { st.textContent = "✗ " + (e.message || e); }
 };
+const startedAt = Date.now();
+loadCoins();
+updateCase();
 checkServer();
 
 if (!NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 requestAnimationFrame(frame);
-window.__coincropper = { tracks, coins, lookup, handleFrame, aliases };  // handy for debugging
+window.__coincropper = { tracks, coins, lookup, handleFrame, aliases, scene };  // handy for debugging
