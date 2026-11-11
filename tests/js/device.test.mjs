@@ -342,6 +342,30 @@ const urls = await page.evaluate(async () => {
 check(urls[0] === "https://www.certifiedcoinexchange.com/m/lookup?bc=6521437-005", `{barcode} NGC → ${urls[0]}`);
 check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F%2Fwww.pcgs.com%2Fcert%2F45678912", "{barcode} QR URL is encoded");
 
+// 10. Built-in settings (baked into the APK as builtin.local.js).
+{
+  const p2 = await browser.newPage();
+  p2.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
+  await p2.addInitScript(() => { window.Capacitor = { isNativePlatform: () => true, nativePromise: async () => ({ status: 200, data: "" }), addListener: () => ({}) }; });
+  await p2.route("https://localhost/**", (r) => {
+    let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
+    if (f === "/builtin.local.js") return r.fulfill({ contentType: "text/javascript",
+      body: 'export default {"cceUser":"me","ccePass":"pw","pcgsTokens":"k1\\nk2","cacgKey":"ck","cacgToken":"ct"};' });
+    const fp = path.join(WEB, f);
+    if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: "" });
+    r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
+  });
+  await p2.goto("https://localhost/");
+  await p2.waitForFunction(() => document.getElementById("mode").textContent !== "…");
+  check(await p2.textContent("#mode") === "CCE live", "built-in CCE login used without typing it in");
+  await p2.click("#settingsBtn");
+  check(await p2.inputValue("[name=ccePass]") === "" && await p2.getAttribute("[name=ccePass]", "placeholder") === "built into this app",
+    "Settings doesn't show built-in values");
+  await p2.fill("[name=cceUser]", "other"); await p2.click("#settingsForm button[type=submit]");
+  check(await p2.evaluate(() => localStorage.getItem("cceUser")) === "other", "typed value overrides the built-in one");
+  await p2.close();
+}
+
 await browser.close();
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

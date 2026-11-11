@@ -32,7 +32,15 @@ const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgK
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
 }
-const settings = () => Object.fromEntries(SETTING_KEYS.map((k) => [k, store(k) || ""]));
+// Built-in settings (Android app only): mobile/secrets.local.json is written into
+// the APK as builtin.local.js at build time. It is never committed or served by
+// the website. Anything typed in Settings overrides it.
+let BUILTIN = {};
+if (NATIVE) {
+  try { BUILTIN = (await import("./builtin.local.js")).default || {}; } catch { BUILTIN = {}; }
+}
+const setting = (k) => store(k) || BUILTIN[k] || "";
+const settings = () => Object.fromEntries(SETTING_KEYS.map((k) => [k, setting(k)]));
 function serverUrl() { return store("serverUrl") || ""; }
 const onDevice = () => NATIVE && !serverUrl();
 const device = makeDeviceBackend(settings);
@@ -704,7 +712,11 @@ function checkServer() {
 
 function openSettings() {
   const f = $("settingsForm").elements;
-  for (const k of SETTING_KEYS) f[k].value = store(k) || "";
+  for (const k of SETTING_KEYS) {
+    f[k].value = store(k) || "";
+    f[k].dataset.ph ??= f[k].placeholder || "";
+    f[k].placeholder = BUILTIN[k] ? "built into this app" : f[k].dataset.ph;
+  }
   if (!f.pcgsTokens.value && store("pcgsToken")) f.pcgsTokens.value = store("pcgsToken");   // older setting
   $("settingsStatus").textContent = "";
   $("sheet").hidden = true; $("caseSheet").hidden = true; openCode = null;

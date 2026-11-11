@@ -211,3 +211,7 @@ mobile/node_modules/
 mobile/android/app/build/
 mobile/android/.gradle/
 mobile/android/local.properties
+
+# Keys and passwords built into the Android app (never commit)
+mobile/secrets.local.json
+web/builtin.local.js

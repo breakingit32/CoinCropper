@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -139,6 +139,12 @@ async def status() -> dict:
         "pcgs_api": bool(settings.pcgs_api_tokens),
         "cac_api": bool(settings.cacg_api_key and settings.cacg_api_token),
     }
+
+
+@app.get("/builtin.local.js")
+async def no_builtin_secrets():
+    # Android-only build artefact with keys; never serve it from the website.
+    raise HTTPException(status_code=404)
 
 
 @app.get("/")

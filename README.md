@@ -80,6 +80,19 @@ because browsers won't let one site read another site's pages.)
 * Until CCE is set up it shows demo prices. Your login is stored only on the
   phone. Under **Advanced** you can still point the app at a server instead.
 
+**Built-in login and keys (your own builds):** put them in
+`mobile/secrets.local.json` (git-ignored; never commit it):
+
+```json
+{ "cceUser": "…", "ccePass": "…", "pcgsTokens": ["key1", "key2"],
+  "cacgKey": "…", "cacgToken": "…", "ngcToken": "…" }
+```
+
+`npm run apk` writes them into the APK (`builtin.local.js`), so the app starts
+signed in with nothing to type. Values typed in Settings override them. Anyone
+who has that APK file can read them, so don't share it. The website and
+GitHub builds never include them.
+
 It's a debug-signed build for installing yourself; publishing to Google Play
 would need a release signing key.
 
