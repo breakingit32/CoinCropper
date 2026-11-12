@@ -330,12 +330,42 @@ function linkBarcode(raw, cert) {
 // Android app: SlabScanner (mobile/android/.../SlabScannerPlugin.java) runs the
 // camera natively and sends every frame's ML Kit barcode + text results.  The
 // camera preview is a native view behind the (transparent) page.
+// Some devices report ML Kit points in the raw (landscape) buffer orientation
+// instead of upright. Decide from the label text: lines facing the user read
+// horizontally on screen. The decision is sticky (votes over many frames).
+const orient = { score: 3, buffer: true };   // starts as seen on a real phone: buffer orientation
+function voteOrientation(ev) {
+  const lines = (ev.lines || []).filter((l) => l.text && l.text.replace(/\s/g, "").length >= 4 && l.corners?.length >= 3);
+  if (lines.length < 2 || !ev.rotation || ev.rotation % 180 === 0) return;
+  let horiz = 0, vert = 0;
+  for (const l of lines) {
+    const [p0, p1, p2] = l.corners;
+    const e1 = [p1[0] - p0[0], p1[1] - p0[1]], e2 = [p2[0] - p1[0], p2[1] - p1[1]];
+    const e = Math.hypot(...e1) >= Math.hypot(...e2) ? e1 : e2;   // reading direction
+    if (Math.abs(e[0]) > Math.abs(e[1]) * 1.5) horiz++; else if (Math.abs(e[1]) > Math.abs(e[0]) * 1.5) vert++;
+  }
+  // In raw coordinates: horizontal text = already upright; vertical = buffer orientation.
+  if (horiz > vert * 2) orient.score = Math.max(-6, orient.score - 1);
+  else if (vert > horiz * 2) orient.score = Math.min(6, orient.score + 1);
+  orient.buffer = orient.score > 0;
+}
+function toUpright(ev) {
+  if (!orient.buffer || !ev.rotation || !ev.bufferWidth) return (p) => p;
+  const W = ev.bufferWidth, H = ev.bufferHeight;
+  if (ev.rotation === 90) return ([x, y]) => [H - y, x];
+  if (ev.rotation === 270) return ([x, y]) => [y, W - x];
+  if (ev.rotation === 180) return ([x, y]) => [W - x, H - y];
+  return (p) => p;
+}
+
 function frameMapper(ev) {
+  voteOrientation(ev);
+  const up = toUpright(ev);
   const v = ev.view, dpr = window.devicePixelRatio || 1;
   const vw = v.w || innerWidth * dpr, vh = v.h || innerHeight * dpr;
   const s = Math.max(vw / ev.width, vh / ev.height);
   const ox = (v.x || 0) + (vw - ev.width * s) / 2, oy = (v.y || 0) + (vh - ev.height * s) / 2;
-  return (corners) => corners.map((p) => [(p[0] * s + ox) / dpr, (p[1] * s + oy) / dpr]);
+  return (corners) => corners.map((p) => { const q = up(p); return [(q[0] * s + ox) / dpr, (q[1] * s + oy) / dpr]; });
 }
 // Remembered layout of the case (see scene.js) and, per slab, where the slab
 // sits relative to its barcode (learned when label and barcode are seen together).
@@ -423,7 +453,7 @@ function renderTags() {
   for (const [code, t] of tracks) {
     const age = now - t.lastSeen;
     // Android: slabs not placed this frame go quickly rather than linger at a stale spot.
-    const ttl = nativeCam ? (t.live ? 600 : 250) : TRACK_TTL_MS;
+    const ttl = nativeCam ? 900 : TRACK_TTL_MS;
     if (!paused && age > ttl) { t.el?.remove(); tracks.delete(code); continue; }
     if (!t.el) {
       t.el = document.createElement("div");
@@ -461,7 +491,7 @@ function renderTags() {
       card.classList.toggle("below", below);
       Object.assign(card.style, { left: cx + "px", top: (below ? s.y + s.h + 10 : s.y - 10) + "px" });
     }
-    t.el.classList.toggle("stale", !paused && age > 400);
+    t.el.classList.toggle("stale", !paused && age > (nativeCam ? 350 : 400));   // fades out, no blink
     t.el.classList.toggle("remembered", t.live === false);
     t.el.classList.toggle("loading", coin.status === "loading");
     t.el.classList.toggle("error", coin.status === "error");
@@ -857,4 +887,4 @@ checkServer();
 
 if (!NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 requestAnimationFrame(frame);
-window.__coincropper = { tracks, coins, lookup, handleFrame, aliases, scene };  // handy for debugging
+window.__coincropper = { tracks, coins, lookup, handleFrame, aliases, scene, orient };  // handy for debugging

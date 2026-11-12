@@ -232,6 +232,11 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                 JSObject event = new JSObject();
                 event.put("width", width);
                 event.put("height", height);
+                // Raw analysis buffer and its rotation, so the page can put points
+                // upright itself if ML Kit reported them in buffer orientation.
+                event.put("rotation", rotation);
+                event.put("bufferWidth", proxy.getWidth());
+                event.put("bufferHeight", proxy.getHeight());
                 int[] r = viewRect;
                 JSObject view = new JSObject();
                 view.put("x", r[0]);

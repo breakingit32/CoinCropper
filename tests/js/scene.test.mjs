@@ -42,8 +42,13 @@ check(c11 && near(c11.world.cx, CASE[5].pose.cx, 3) && near(c11.world.cy, CASE[5
 
 // 4. One slab alone is too rough to place the others: only it is shown.
 const cam3 = cam(0.9, -8, 200, 100);
-r = m.update(onScreen(cam3, ["C11"]), t += 100);
-check(r.visible.length === 1 && r.visible[0].key === "C11" && r.visible[0].live, "single recognised slab: others hidden, not guessed");
+// Shortly after a good view, one slab keeps the others up (no blinking)...
+r = m.update(onScreen(cam2, ["C11"]), t += 100);
+const held = r.visible.find((v) => v.key === "C00"), tc = poseTo(cam2, CASE[0].pose);
+check(held && near(held.slab.cx, tc.cx, 3) && near(held.slab.cy, tc.cy, 3), "one slab right after a good view: others held in place");
+// ...but long after, one slab alone is too rough a guess: only it is shown.
+r = m.update(onScreen(cam3, ["C11"]), t += 2000);
+check(r.visible.length === 1 && r.visible[0].key === "C11" && r.visible[0].live, "single recognised slab much later: others hidden, not guessed");
 // Two agreeing slabs pin the camera down: the rest are placed.
 r = m.update(onScreen(cam3, ["C10", "C11"]), t += 100);
 const c01 = r.visible.find((v) => v.key === "C01"), tr = poseTo(cam3, CASE[1].pose);

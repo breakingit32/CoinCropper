@@ -249,7 +249,7 @@ await frame([{ raw: "6521437-005", corners: rect(100, 600, 400, 80) },
 // slab is placed from memory and follows the camera.
 const twoBars = (dx, dy) => [{ raw: "6521437-005", corners: rect(100 + dx, 600 + dy, 400, 80) },
                              { raw: "72686402401136", corners: rect(200 + dx, 1190 + dy, 420, 50) }];
-await frame(twoBars(0, 0));
+for (let i = 0; i < 6; i++) await frame(twoBars(0, 0));   // let the estimate settle
 await page.waitForFunction(() => window.__coincropper.tracks.get("47966447")?.live === false);
 const textBefore = await page.evaluate(() => ({ ...window.__coincropper.tracks.get("47966447").slab }));
 for (let i = 0; i < 6; i++)   // camera moved: +60,-80 px = +30,-40 CSS (smoothing settles over a few frames)
@@ -397,6 +397,40 @@ const urls = await page.evaluate(async () => {
 });
 check(urls[0] === "https://www.certifiedcoinexchange.com/m/lookup?bc=6521437-005", `{barcode} NGC → ${urls[0]}`);
 check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F%2Fwww.pcgs.com%2Fcert%2F45678912", "{barcode} QR URL is encoded");
+
+// 11. Points reported in the raw (landscape) buffer orientation, rotation 90:
+//     the label must still come out upright, on the right spot.
+{
+  const p3 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
+  p3.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
+  await p3.addInitScript(() => { window.__l = []; window.Capacitor = { isNativePlatform: () => true,
+    addListener: (p, e, cb) => { window.__l.push(cb); return {}; }, nativePromise: async (p) => (p === "SlabScanner" ? { torch: false } : { status: 404, data: "" }) }; });
+  await p3.route("https://localhost/**", (r) => {
+    let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
+    const fp = path.join(WEB, f);
+    if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: "" });
+    r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
+  });
+  await p3.goto("https://localhost/");
+  await p3.click("#startBtn");
+  // Upright image 824x1830 (= preview, so CSS = px/2). Buffer is 1830x824, rotation 90:
+  // upright (x, y) <- buffer (y, 1830 - x)... i.e. buffer point = [y_u, H_b - x_u] with H_b = 824.
+  const Hb = 824;
+  const toBuf = (pts) => pts.map(([x, y]) => [y, Hb - x]);
+  const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const upLines = [["1807", 150, 800, 220, 830], ["50C", 520, 800, 580, 830], ["PCGS AU53", 290, 840, 450, 870], ["6079.53/54253891", 240, 950, 520, 980]];
+  const lines = upLines.map(([text, ...b], i) => ({ text, block: i, corners: toBuf(R(...b)) }));
+  for (let i = 0; i < 4; i++)
+    await p3.evaluate(([lines]) => window.__l.forEach((cb) => cb({ width: 824, height: 1830, rotation: 90, bufferWidth: 1830, bufferHeight: 824,
+      view: { x: 0, y: 0, w: 824, h: 1830 }, barcodes: [], lines })), [lines]);
+  await p3.waitForFunction(() => window.__coincropper.tracks.get("54253891")?.slab);
+  const sl = await p3.evaluate(() => window.__coincropper.tracks.get("54253891").slab);
+  // Label centre x ~ (150+580)/4 = 182 CSS; slab hangs below the label (portrait, upright).
+  check(Math.abs(sl.angle) < 0.05 && sl.h > sl.w && Math.abs(sl.cx - 182) < 25 && sl.cy > 490,
+    `buffer-orientation points turned upright (angle ${sl.angle.toFixed(2)}, ${[sl.cx, sl.cy, sl.w, sl.h].map(Math.round)})`);
+  check(await p3.evaluate(() => window.__coincropper.orient.buffer), "orientation detected from the label text");
+  await p3.close();
+}
 
 // 10. Built-in settings (baked into the APK as builtin.local.js).
 {

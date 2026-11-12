@@ -34,15 +34,19 @@ const DENOM_RE = /(\b[SG]?\$\s?\d+(?:\.\d+)?\b|\$\s?\d+|\b\d+\s?C\b|\bH10C\b|\b\
 const centroid = (pts) => [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length];
 
 // Local frame of a detected box (corners clockwise from top-left).
+// Doesn't rely on the corner order (it changes with image rotation): the
+// longer side is the reading direction, taken to run left-to-right on screen,
+// and v points down the label.
 export function frameOf(corners) {
-  const [p0, p1, , p3] = corners;
-  let ux = p1[0] - p0[0], uy = p1[1] - p0[1];
-  const w = Math.hypot(ux, uy) || 1;
+  const [p0, p1, p2] = corners;
+  const e1 = [p1[0] - p0[0], p1[1] - p0[1]], e2 = [p2[0] - p1[0], p2[1] - p1[1]];
+  const l1 = Math.hypot(...e1), l2 = Math.hypot(...e2);
+  let [ux, uy] = l1 >= l2 ? e1 : e2;
+  const w = Math.max(l1, l2) || 1, h = Math.min(l1, l2) || 1;
   ux /= w; uy /= w;
-  let vx = -uy, vy = ux;
-  const d = (p3[0] - p0[0]) * vx + (p3[1] - p0[1]) * vy;
-  if (d < 0) { vx = -vx; vy = -vy; }
-  return { c: centroid(corners), u: [ux, uy], v: [vx, vy], w, h: Math.abs(d) || 1 };
+  if (ux < 0 || (Math.abs(ux) < 1e-6 && uy < 0)) { ux = -ux; uy = -uy; }
+  const vx = -uy, vy = ux;   // 90° clockwise from u: "down" when u points right
+  return { c: centroid(corners), u: [ux, uy], v: [vx, vy], w, h };
 }
 const proj = (f, p) => [(p[0] - f.c[0]) * f.u[0] + (p[1] - f.c[1]) * f.u[1],
                         (p[0] - f.c[0]) * f.v[0] + (p[1] - f.c[1]) * f.v[1]];

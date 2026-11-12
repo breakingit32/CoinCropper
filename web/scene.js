@@ -95,7 +95,7 @@ const overlap = (p, q) => {
 // ------------------------------------------------------------ map
 
 export class SceneMap {
-  constructor({ confirmReads = 2, confirmMs = 2500, holdMs = 700, smooth = 0.6 } = {}) {
+  constructor({ confirmReads = 2, confirmMs = 2500, holdMs = 1000, smooth = 0.6 } = {}) {
     Object.assign(this, { confirmReads, confirmMs, holdMs, smooth });
     this.slabs = new Map();     // key -> {key, world, island, seen, firstSeen, lastSeen}
     this.islands = new Map();   // id  -> {T, at}
@@ -156,8 +156,23 @@ export class SceneMap {
       inlierKeys = new Set(inliers.map((p) => p[2]));
       good = inlierKeys.size >= 2;
       const isl = this.islands.get(main);
-      mainT = isl && t - isl.at < 400 ? blendT(isl.T, T, this.smooth) : T;
-      this.islands.set(main, { T: mainT, at: t, good });
+      if (good) {
+        mainT = isl?.goodT && t - isl.goodAt < 400 ? blendT(isl.goodT, T, this.smooth) : T;
+        this.islands.set(main, { T: mainT, at: t, good, goodT: mainT, goodAt: t });
+      } else if (isl?.goodT && t - isl.goodAt < this.holdMs) {
+        // One match: keep the last good scale/rotation, shift so the matched
+        // slab lines up. Keeps remembered cards steady instead of blinking.
+        const g = isl.goodT;
+        let dx = 0, dy = 0;
+        for (const [w, sc] of mainPairs) { const q = apply(g, [w.cx, w.cy]); dx += sc.cx - q[0]; dy += sc.cy - q[1]; }
+        dx /= mainPairs.length; dy /= mainPairs.length;
+        const shifted = { ...g, tx: g.tx + dx, ty: g.ty + dy };
+        mainT = blendT(isl.T, shifted, this.smooth);
+        this.islands.set(main, { ...isl, T: mainT, at: t, good: false, held: true });
+      } else {
+        mainT = isl && t - isl.at < 400 ? blendT(isl.T, T, this.smooth) : T;
+        this.islands.set(main, { ...(isl || {}), T: mainT, at: t, good: false, held: false });
+      }
       // 3. Other islands in view: merge them into the main one. A one-slab
       //    island just takes the slab's position as seen now; bigger islands
       //    need both sides pinned down (2+ agreeing matches) to line them up.
@@ -196,7 +211,7 @@ export class SceneMap {
       main = this.nextIsland++;
       mainT = identity();
       good = true;
-      this.islands.set(main, { T: mainT, at: t, good: true });
+      this.islands.set(main, { T: mainT, at: t, good: true, goodT: mainT, goodAt: t });
     }
     const inv = main != null && byIsland.has(main) ? invert(robustFit(mainPairs).T) : mainT ? invert(mainT) : null;
     const liveDets = new Map(known.map((d) => [d.key, d]));
@@ -229,7 +244,9 @@ export class SceneMap {
     if (!isl) {   // nothing recognised this frame: hold the last good view briefly
       for (const [id, x] of this.islands) if (t - x.at < this.holdMs && (!isl || x.at > isl.at)) { isl = x; main = id; }
     }
-    if (isl?.good) {
+    // Remembered slabs: with a good estimate this frame, or held from one that
+    // was good within holdMs (no blinking when a frame has fewer matches).
+    if (isl && (isl.good || isl.held || (isl.goodAt && t - isl.goodAt < this.holdMs))) {
       for (const s of this.slabs.values()) {
         if (s.island !== main || liveDets.has(s.key)) continue;
         visible.push({ key: s.key, slab: poseTo(isl.T, s.world), live: false });
