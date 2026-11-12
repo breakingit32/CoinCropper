@@ -1,7 +1,8 @@
 // Case order check: is every slab where it belongs?
 //
-// Correct order: denomination (series order) > date > mint mark > business
-// before proof > plain before varieties > grade (low to high by default) >
+// Correct order (Red Book, as dealers lay out a case): denomination > date >
+// mint mark > business before proof > plain before varieties > grade (high
+// to low by default) >
 // designation (DMPL, PL, plain; UCAM/DCAM, CAM, plain; RD, RB, BN; FB/FS/FH
 // first) > CAC (Gold, Green, none).
 //
@@ -14,7 +15,7 @@ import { wantedFromLabel } from "./catalog.js";
 
 const DENOM_ORDER = [
   [/^(1\/2C|HALF ?C(ENT)?)$/i, 0], [/^1C$/i, 1], [/^2C$/i, 2], [/^3CS$/i, 3], [/^3CN?$/i, 4],
-  [/^H10C$/i, 5], [/^5C$/i, 6], [/^10C$/i, 7], [/^20C$/i, 8], [/^25C$/i, 9], [/^50C$/i, 10],
+  [/^5C$/i, 5], [/^H10C$/i, 6], [/^10C$/i, 7],   // nickels before half dimes (Red Book order) [/^20C$/i, 8], [/^25C$/i, 9], [/^50C$/i, 10],
   [/^(S\$1|\$1|T\$1)$/i, 11], [/^G\$1$/i, 12], [/^\$2(\.50)?$/i, 13], [/^\$3$/i, 14], [/^\$5$/i, 15],
   [/^\$10$/i, 16], [/^\$20$/i, 17],
 ];
@@ -51,7 +52,7 @@ export function orderFields(coin) {
 }
 
 // Negative when a belongs before b.
-export function compareCoins(a, b, { gradeDescending = false } = {}) {
+export function compareCoins(a, b, { gradeDescending = true } = {}) {
   const mintRank = (m) => { const i = MINT_ORDER.indexOf(m); return i < 0 ? 50 : i; };
   return (a.denomRank - b.denomRank)
     || (a.year - b.year)

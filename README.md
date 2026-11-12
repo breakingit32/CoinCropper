@@ -79,10 +79,10 @@ because browsers won't let one site read another site's pages.)
   the case list forgets everything.
 * **Order check (⇅ button):** checks that the case is in the right order
   instead of pricing. Slabs are read row by row (top to bottom, left to
-  right) and must run by denomination (½C, 1C, 2C, 3CS, 3CN, H10C, 5C, 10C,
-  20C, 25C, 50C, $1, gold), date, mint (P, C, CC, D, O, S, W), business before
-  proof, plain before varieties, grade (low to high, or high to low in
-  Settings), then DMPL/PL before plain, UCAM/DCAM, CAM before plain, RD, RB,
+  right) and must run in Red Book order by denomination (½C, 1C, 2C, 3CS,
+  3CN, 5C, H10C, 10C, 20C, 25C, 50C, $1, gold), date, mint (P, C, CC, D, O, S,
+  W), business before proof, plain before varieties, grade (high to low, or
+  low to high in Settings), then DMPL/PL before plain, UCAM/DCAM, CAM before plain, RD, RB,
   BN, FB/FS/FH first, and CAC Gold, Green, then no sticker. Only the fewest
   slabs that need moving are flagged (red, "Move · after …"); the rest show
   ✓ and their position. No price lookups are made in this mode.

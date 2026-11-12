@@ -11,12 +11,15 @@ const before = (a, b, what) => check(compareCoins(a, b) < 0, what);
 before(F("1909 S VDB 1C", "AU53 BN"), F("1834 10C", "MS63"), "cents before dimes (denomination first)");
 before(F("1916 10C", "MS64"), F("1916-D 10C", "F15"), "Philadelphia before D (same date)");
 before(F("1916-D 10C", "F15"), F("1917 10C", "VF20"), "date before grade");
-before(F("1885-O $1", "MS64"), F("1885-O $1", "MS65"), "grade low to high");
+before(F("1937-D 3 LEGS 5C", "AU50"), F("1937-D 3 LEGS 5C", "XF45"), "grade high to low (default, as in the case)");
+check(compareCoins(F("1885-O $1", "MS64"), F("1885-O $1", "MS65"), { gradeDescending: false }) < 0, "grade low to high when set");
+before(F("1937-D 3 LEGS 5C", "VF30"), F("1800 H10C", "G06"), "nickels before half dimes (Red Book order)");
+before(F("1889 3CN", "PR66"), F("1878 5C", "PR66"), "three cents before nickels");
 before(F("1885-O $1", "MS64 DMPL"), F("1885-O $1", "MS64 PL"), "DMPL before PL (same grade)");
 before(F("1885-O $1", "MS64 PL"), F("1885-O $1", "MS64"), "PL before non-PL (same grade)");
 before(F("1885-O $1", "MS64", "Green"), F("1885-O $1", "MS64"), "CAC before non-CAC (same grade)");
 before(F("1885-O $1", "MS64", "Gold"), F("1885-O $1", "MS64", "Green"), "CAC Gold before Green");
-before(F("1885-O $1", "MS64"), F("1885-O $1", "MS64+"), "64 before 64+");
+before(F("1885-O $1", "MS64+"), F("1885-O $1", "MS64"), "64+ before 64 (high to low)");
 before(F("1909-S 1C", "MS64 RD"), F("1909-S 1C", "MS64 BN"), "RD before BN (same grade)");
 before(F("1936 10C", "MS65"), F("1936 10C", "PR65"), "business strike before proof (same date)");
 before(F("1880 3CN", "PF64 CAMEO"), F("1881 3CN", "PF 64"), "3CN by date");
@@ -30,6 +33,15 @@ const ro = readingOrder([{ key: "b", x: 300, y: 105, w: 140, h: 200 }, { key: "a
   { key: "d", x: 300, y: 320, w: 140, h: 200 }, { key: "c", x: 100, y: 310, w: 140, h: 200 }]).map((p) => p.key).join("");
 check(ro === "abcd", `reading order ${ro}`);
 
+// Rows from the case photo: 3 Legs nickels high to low, then half dimes by date.
+{
+  const row = [["1937-D 3 LEGS 5C", "AU50"], ["1937-D 3 LEGS 5C", "XF45"], ["1937-D 3 LEGS 5C", "VF35"], ["1937-D 3 LEGS 5C", "VF30"],
+    ["1800 H10C", "G06"], ["1801 H10C", "VF30"], ["1832 H10C", "MS65"], ["1833 H10C", "MS65"], ["1834 H10C", "MS65"]];
+  const sl = row.map((_, i) => ({ key: "k" + i, x: (i % 5) * 150, y: Math.floor(i / 5) * 210, w: 140, h: 200 }));
+  const r = checkOrder(sl, (k) => F(...row[+k.slice(1)]));
+  check(r.wrong === 0, `case photo rows are in order (${r.wrong} to move)`);
+}
+
 // A case with two slabs swapped and one in the wrong row.
 const C = {
   a: coin("1909 S VDB 1C", "AU53 BN"), b: coin("1916 10C", "MS64"), c: coin("1916-D 10C", "F15"),
@@ -38,13 +50,13 @@ const C = {
 // laid out: row1: a c b d   row2: e g f      (correct: a e b c d f g)
 const pos = { a: [0, 0], c: [1, 0], b: [2, 0], d: [3, 0], e: [0, 1], g: [1, 1], f: [2, 1] };
 const slabs = Object.entries(pos).map(([key, [cx, r]]) => ({ key, x: 100 + cx * 150, y: 100 + r * 210, w: 140, h: 200 }));
-const res = checkOrder(slabs, (k) => orderFields(C[k]));
+const res = checkOrder(slabs, (k) => orderFields(C[k]), { gradeDescending: false });
 const wrong = [...res.items].filter(([, v]) => v.ok === false).map(([k]) => k).sort().join("");
 check(res.wrong === 3 && res.total === 7, `3 of 7 slabs flagged (${wrong})`);
 check(res.items.get("e").ok === false && res.items.get("e").after === "1909 S VDB 1C · AU53 BN",
   `1834 dime: move after the 1909-S VDB (${res.items.get("e").after})`);
 check(res.items.get("a").ok && res.items.get("d").ok && res.items.get("a").pos === 1, "slabs already in place are marked OK, with positions");
-const unk = checkOrder([...slabs, { key: "z", x: 550, y: 310, w: 140, h: 200 }], (k) => (k === "z" ? null : orderFields(C[k])));
+const unk = checkOrder([...slabs, { key: "z", x: 550, y: 310, w: 140, h: 200 }], (k) => (k === "z" ? null : orderFields(C[k])), { gradeDescending: false });
 check(unk.unknown === 1 && unk.items.get("z").known === false && unk.wrong === 3, "unreadable slab is skipped, not counted wrong");
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");

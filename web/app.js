@@ -570,7 +570,7 @@ function computeOrder() {
   const ang = Math.atan2(isl.reduce((t, s) => t + Math.sin(s.world.angle), 0), isl.reduce((t, s) => t + Math.cos(s.world.angle), 0));
   const c = Math.cos(-ang), sn = Math.sin(-ang);
   const slabs = isl.map((s) => ({ key: s.key, x: s.world.cx * c - s.world.cy * sn, y: s.world.cx * sn + s.world.cy * c, w: s.world.w, h: s.world.h }));
-  return checkOrder(slabs, (k) => orderFields(coins.get(k)), { gradeDescending: setting("gradeOrder") === "desc" });
+  return checkOrder(slabs, (k) => orderFields(coins.get(k)), { gradeDescending: setting("gradeOrder") !== "asc" });
 }
 
 function renderOrderCard(t, coin, t1, t2) {
