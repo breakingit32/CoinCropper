@@ -432,6 +432,46 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p3.close();
 }
 
+// 12. Order check mode: a row of NGC dimes, one out of place.
+{
+  const p4 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
+  p4.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
+  await p4.addInitScript(() => { window.__l = []; window.__calls = []; window.Capacitor = { isNativePlatform: () => true,
+    addListener: (p, e, cb) => { window.__l.push(cb); return {}; },
+    nativePromise: async (p, m, o) => { window.__calls.push(o?.url || p + "." + m); return p === "SlabScanner" ? { torch: false } : { status: 404, data: "" }; } }; });
+  await p4.route("https://localhost/**", (r) => {
+    let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
+    const fp = path.join(WEB, f);
+    if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: "" });
+    r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
+  });
+  await p4.goto("https://localhost/");
+  await p4.click("#modeBtn");
+  await p4.click("#startBtn");
+  check(await p4.isVisible("#orderSummary") && await p4.evaluate(() => localStorage.getItem("mode")) === "order", "order mode switched on");
+  const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  // Four slabs left to right (image = preview 824x1830 px), labels: date+denom / grade / cert.
+  const slabs = [["1834 10C", "MS 63", "8569183-008"], ["1921 10C", "AU 55", "2047300-004"],
+                 ["1916 D 10C", "F 15", "1275103-001"], ["1917 10C", "VF 20", "3905372-012"]];
+  // Spaced like a real NGC case: label text spans ~60% of the slab pitch.
+  const lines = slabs.flatMap(([d, g, c], i) => { const x = 30 + i * 200; return [
+    { text: d, block: i * 3, corners: R(x, 400, x + 80, 420) }, { text: g, block: i * 3 + 1, corners: R(x, 430, x + 50, 450) },
+    { text: c, block: i * 3 + 2, corners: R(x, 465, x + 100, 482) }]; });
+  for (let i = 0; i < 4; i++) {
+    await p4.evaluate(([lines]) => window.__l.forEach((cb) => cb({ width: 824, height: 1830, view: { x: 0, y: 0, w: 824, h: 1830 }, barcodes: [], lines })), [lines]);
+    await p4.waitForTimeout(80);
+  }
+  await p4.waitForFunction(() => /to move|in order/.test(document.getElementById("orderSummary").textContent), null, { timeout: 5000 });
+  const summary = await p4.textContent("#orderSummary");
+  const cards = await p4.evaluate(() => Object.fromEntries([...window.__coincropper.tracks].map(([k, t]) => [k, t.el?.lastChild.textContent])));
+  check(summary === "4 slabs · 1 to move", `summary: ${summary}`);
+  check(/Move · after 1917 10C · VF20/.test(cards["2047300-004"] || ""), `1921 card: ${cards["2047300-004"]}`);
+  check(/✓ #1/.test(cards["8569183-008"] || "") && /✓ #3/.test(cards["1275103-001"] || ""), `in-place cards: ${cards["8569183-008"]} / ${cards["1275103-001"]}`);
+  const priced = await p4.evaluate(() => window.__calls.filter((u) => /greysheet|certifiedcoinexchange/.test(u)).length);
+  check(priced === 0, "order mode makes no price lookups");
+  await p4.close();
+}
+
 // 10. Built-in settings (baked into the APK as builtin.local.js).
 {
   const p2 = await browser.newPage();

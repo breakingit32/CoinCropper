@@ -21,6 +21,7 @@
       <div class="brand">CoinCropper</div>
       <div class="top-right">
         <div id="mode" class="pill">…</div>
+        <button id="modeBtn" class="icon-btn" aria-label="Order check mode" title="Order check">⇅</button>
         <button id="settingsBtn" class="icon-btn" aria-label="Settings" hidden>⚙</button>
       </div>
     </header>
@@ -38,7 +39,8 @@
     <footer id="controls" hidden>
       <button id="pauseBtn" class="round" aria-label="Freeze frame">❚❚</button>
       <button id="caseBtn" class="pill-btn">
-        <span id="caseCount">0</span> coins · <span id="caseTotal">$0</span>
+        <span id="priceSummary"><span id="caseCount">0</span> coins · <span id="caseTotal">$0</span></span>
+        <span id="orderSummary" hidden>Order check</span>
       </button>
       <button id="torchBtn" class="round" aria-label="Flashlight" hidden>☀</button>
     </footer>
@@ -154,6 +156,10 @@
       <div class="row">
         <button type="button" id="copyCcePage">Copy last CCE page</button>
       </div>
+      <h3>Order check</h3>
+      <label>Grade order within the same coin
+        <select name="gradeOrder"><option value="asc">Low to high</option><option value="desc">High to low</option></select>
+      </label>
       <h3>Grading APIs</h3>
       <p class="muted">Identify each slab from the grading service's own record: coin, grade,
         PCGS #, price guide, population, auction history and CAC sticker.</p>

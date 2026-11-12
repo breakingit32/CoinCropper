@@ -133,14 +133,29 @@ function canonicalText(id, fields, anchorText) {
 export function readSlabs(lines, barcodes) {
   const slabs = [];
   const usedBars = new Set();
-  for (const anchor of lines) {
+  // Each text line / barcode belongs to the nearest cert line it could be part
+  // of, so closely packed slabs don't share label lines.
+  const anchors = lines.filter((l) => labelAnchor(l.text)).map((l) => ({ l, f: frameOf(l.corners) }));
+  const owner = new Map();
+  const claim = (item, inWindow) => {
+    let best = null, bestCost = Infinity;
+    for (const a of anchors) {
+      const [cu, cv] = proj(a.f, centroid(item.corners));
+      if (!inWindow(cu, cv, a.f)) continue;
+      const cost = (cu / a.f.w) ** 2 + ((cv + (cv < 0 ? 3 : -1.5) * a.f.h) / (6 * a.f.h)) ** 2;
+      if (cost < bestCost) { bestCost = cost; best = a.l; }
+    }
+    owner.set(item, best);
+  };
+  for (const l of lines) if (!labelAnchor(l.text)) claim(l, (cu, cv, f) => cv < -0.5 * f.h && cv > -9 * f.h && Math.abs(cu) < 1.5 * f.w);
+  for (const b of barcodes) claim(b, (cu, cv, f) => cv > 0.3 * f.h && cv < 5 * f.h && Math.abs(cu) < 1.2 * f.w);
+  for (const { l: anchor, f } of anchors) {
     const id = labelAnchor(anchor.text);
-    if (!id) continue;
-    const f = frameOf(anchor.corners), H = f.h, W = f.w;
+    const H = f.h, W = f.w;
 
     // Lines above the anchor on the same label: walk upward while rows are
     // close together, so the next slab's label above is not pulled in.
-    const cands = lines.filter((l) => l !== anchor && !labelAnchor(l.text)).map((l) => {
+    const cands = lines.filter((l) => owner.get(l) === anchor).map((l) => {
       const [cu, cv] = proj(f, centroid(l.corners));
       return { text: l.text, corners: l.corners, cu, cv };
     }).filter((m) => m.cv < -0.5 * H && m.cv > -9 * H && Math.abs(m.cu) < 1.5 * W)
@@ -156,7 +171,7 @@ export function readSlabs(lines, barcodes) {
     // Barcode just below the anchor line.
     let bar = null;
     for (const b of barcodes) {
-      if (usedBars.has(b)) continue;
+      if (usedBars.has(b) || owner.get(b) !== anchor) continue;
       const [bu, bv] = proj(f, centroid(b.corners));
       if (bv > 0.3 * H && bv < 5 * H && Math.abs(bu) < 1.2 * W) { bar = b; break; }
     }

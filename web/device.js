@@ -225,6 +225,11 @@ export function makeDeviceBackend(getSettings) {
     lastCcePage() { return client?.lastPage || null; },
     async lookup(req) {
       const { coin, grading: g, match } = await identify(req);
+      // Order check: identify only (PCGS/CAC are cached on the phone); no prices.
+      if (req.mode === "order") {
+        return { coin, grading: g, bids: summarise("order", []), greysheet: null, greysheet_status: null,
+          order_only: true, verify_url: verifyUrl(coin), cce_url: CCE_BASE };
+      }
       const c = cce();
       let bids;
       if (!c) bids = await mockBids(coin);

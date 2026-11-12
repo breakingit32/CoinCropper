@@ -77,6 +77,15 @@ because browsers won't let one site read another site's pages.)
   coin again (even after restarting the app) doesn't look it up again; bids
   older than 12 hours are refreshed once when the coin is seen. **Clear** in
   the case list forgets everything.
+* **Order check (⇅ button):** checks that the case is in the right order
+  instead of pricing. Slabs are read row by row (top to bottom, left to
+  right) and must run by denomination (½C, 1C, 2C, 3CS, 3CN, H10C, 5C, 10C,
+  20C, 25C, 50C, $1, gold), date, mint (P, C, CC, D, O, S, W), business before
+  proof, plain before varieties, grade (low to high, or high to low in
+  Settings), then DMPL/PL before plain, UCAM/DCAM, CAM before plain, RD, RB,
+  BN, FB/FS/FH first, and CAC Gold, Green, then no sticker. Only the fewest
+  slabs that need moving are flagged (red, "Move · after …"); the rest show
+  ✓ and their position. No price lookups are made in this mode.
 * Until CCE is set up it shows demo prices. Your login is stored only on the
   phone. Under **Advanced** you can still point the app at a server instead.
 
@@ -200,6 +209,7 @@ node tests/js/device.test.mjs   # app's on-device mode (needs Playwright)
 node tests/js/scene.test.mjs    # remembered case layout
 node tests/js/slab.test.mjs     # label model on real labels
 node tests/js/catalog.test.mjs  # PCGS # for NGC slabs from the Greysheet catalog
+node tests/js/order.test.mjs    # case order check
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)

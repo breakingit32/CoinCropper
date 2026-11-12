@@ -4,6 +4,7 @@ import { makeDeviceBackend } from "./device.js";
 import { readSlabs, slabFromBarcode } from "./slab.js";
 import { greyValue, parseKeysFile } from "./grading.js";
 import { SceneMap } from "./scene.js";
+import { checkOrder, orderFields } from "./order.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
@@ -28,7 +29,7 @@ let nativeCam = false;      // Android app: Google ML Kit scanner draws the came
 // Android app: lookups run on the phone (device.js signs in to CCE directly),
 // unless a server address is set in Settings.
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
-const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "serverUrl"];
+const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "serverUrl", "gradeOrder"];
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
 }
@@ -217,7 +218,7 @@ async function lookup(key, extra = {}) {
   const seq = (coin.seq = (coin.seq || 0) + 1);
   renderTags(); if (openCode === key) renderSheet();
   try {
-    const result = await backendLookup({ ...coin.overrides, code: coin.code });
+    const result = await backendLookup({ ...coin.overrides, code: coin.code, mode });
     if (seq !== coin.seq) return;           // a newer lookup for this coin is running
     coin.result = result;
     coin.status = "ok";                          // other prices may still be there
@@ -298,6 +299,8 @@ function updateCoin(key, f) {
     coin.ocrComplete = !!f.complete;
     changed = true;
   }
+  // Identified in order-check mode (no prices yet): look up prices now.
+  if (!changed && mode === "price" && coin.result?.order_only && coin.status === "ok") changed = true;
   // Bids from an earlier session go stale: refresh once when seen again.
   if (!changed && coin.status === "ok" && coin.at && Date.now() - coin.at > REFRESH_BIDS_MS) changed = true;
   if (changed && coin.status !== "loading") lookup(key);
@@ -496,6 +499,8 @@ function renderTags() {
     t.el.classList.toggle("loading", coin.status === "loading");
     t.el.classList.toggle("error", coin.status === "error");
     const t1 = card.firstChild, t2 = card.lastChild;
+    if (mode === "order") { renderOrderCard(t, coin, t1, t2); continue; }
+    t.el.classList.remove("order-ok", "order-bad", "order-unknown");
     const high = coin.result?.bids?.high_bid, guide = coin.result?.grading?.price_guide;
     const grey = greyValue(coin.result?.greysheet);
     const cac = coin.result?.grading?.cac;
@@ -550,7 +555,72 @@ function declutter() {
   }
 }
 
-function frame() { renderTags(); declutter(); requestAnimationFrame(frame); }
+// ---------------------------------------------------------------- order check mode
+
+let mode = store("mode") === "order" ? "order" : "price";
+let orderState = null, orderAt = 0;
+
+// Order of the slabs in the part of the case in view (the island seen last),
+// from their remembered case positions, straightened by the case's angle.
+function computeOrder() {
+  const all = [...scene.slabs.values()];
+  if (!all.length) return null;
+  const latest = all.reduce((a, b) => (b.lastSeen > a.lastSeen ? b : a));
+  const isl = all.filter((s) => s.island === latest.island && coins.has(s.key));
+  const ang = Math.atan2(isl.reduce((t, s) => t + Math.sin(s.world.angle), 0), isl.reduce((t, s) => t + Math.cos(s.world.angle), 0));
+  const c = Math.cos(-ang), sn = Math.sin(-ang);
+  const slabs = isl.map((s) => ({ key: s.key, x: s.world.cx * c - s.world.cy * sn, y: s.world.cx * sn + s.world.cy * c, w: s.world.w, h: s.world.h }));
+  return checkOrder(slabs, (k) => orderFields(coins.get(k)), { gradeDescending: setting("gradeOrder") === "desc" });
+}
+
+function renderOrderCard(t, coin, t1, t2) {
+  const st = orderState?.items.get(t.key);
+  t1.textContent = st?.label || coinTitle(coin);
+  t.el.classList.toggle("order-ok", st?.ok === true);
+  t.el.classList.toggle("order-bad", st?.ok === false);
+  t.el.classList.toggle("order-unknown", !st || !st.known);
+  const label = !st || !st.known ? (coin.status === "loading" ? "Reading…" : "Can't read label")
+    : st.ok ? `✓ #${st.pos}` : st.after ? `Move · after ${st.after}` : `Move · first, before ${st.before}`;
+  if (t2.dataset.v !== label) { t2.dataset.v = label; t2.textContent = label; }
+}
+
+function updateOrderSummary() {
+  $("priceSummary").hidden = mode === "order";
+  $("orderSummary").hidden = mode !== "order";
+  $("modeBtn").classList.toggle("on", mode === "order");
+  if (mode !== "order") return;
+  const s = orderState;
+  $("orderSummary").textContent = !s || !s.total ? "Order check · scan the case"
+    : s.wrong ? `${s.total} slabs · ${s.wrong} to move` : `${s.total - s.unknown} slabs · all in order ✓`;
+}
+
+function renderOrderList() {
+  const s = orderState;
+  if (!s) { $("caseList").innerHTML = ""; $("caseSub").textContent = "Scan the case to check its order."; return; }
+  const rows = [...s.items.entries()].sort((a, b) => a[1].pos - b[1].pos);
+  $("caseSub").textContent = s.wrong ? `${s.wrong} of ${s.total} slabs out of order` : `All ${s.total - s.unknown} readable slabs in order`;
+  $("caseList").innerHTML = rows.map(([key, v]) => `<li data-code="${esc(key)}" class="${v.ok === false ? "bad" : v.ok ? "good" : ""}">
+      <span>#${v.pos} ${esc(v.label || coinTitle(coins.get(key) || {}))}</span>
+      <span class="p">${v.ok === false ? esc(v.after ? "after " + v.after : "first") : v.ok ? "✓" : "?"}</span></li>`).join("");
+}
+
+$("modeBtn").onclick = () => {
+  mode = mode === "order" ? "price" : "order";
+  store("mode", mode);
+  for (const c of coins.values()) if (mode === "price" && c.result?.order_only) c.status = "ok";   // re-priced when seen
+  updateOrderSummary();
+  if (!$("caseSheet").hidden) (mode === "order" ? renderOrderList() : updateCase());
+};
+
+function frame() {
+  if (mode === "order" && performance.now() - orderAt > 250) {
+    orderAt = performance.now();
+    orderState = computeOrder();
+    updateOrderSummary();
+    if (!$("caseSheet").hidden) renderOrderList();
+  }
+  renderTags(); declutter(); requestAnimationFrame(frame);
+}
 
 // ---------------------------------------------------------------- sheets
 
@@ -675,6 +745,7 @@ function updateCase() {
   $("caseSub").textContent = `${list.length} coins this session · CCE bids ${money(total)}` +
     (greyT ? ` · Greysheet ${money(greyT)}` : "") + (guide ? ` · PCGS guide ${money(guide)}` : "") +
     (remembered ? ` · ${remembered} more remembered from earlier` : "");
+  if (mode === "order") return;
   $("caseList").innerHTML = list.map(([key, c]) => `<li data-code="${esc(key)}">
       <span>${esc(coinTitle(c))}${c.result?.grading?.cac ? ` <small class="cac-${esc(c.result.grading.cac.toLowerCase())}">CAC</small>` : ""}</span>
       <span class="p">${esc(coinValue(c) != null ? money(coinValue(c)) : greyOf(c) != null ? "Grey " + money(greyOf(c))
@@ -774,7 +845,11 @@ $("torchBtn").onclick = async () => {
   } catch {}
   $("torchBtn").classList.toggle("on", torchOn);
 };
-$("caseBtn").onclick = () => { $("sheet").hidden = true; openCode = null; updateCase(); $("caseSheet").hidden = false; };
+$("caseBtn").onclick = () => {
+  $("sheet").hidden = true; openCode = null;
+  if (mode === "order") renderOrderList(); else updateCase();
+  $("caseSheet").hidden = false;
+};
 $("caseList").onclick = (e) => { const li = e.target.closest("li"); if (li) openSheet(li.dataset.code); };
 document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => {
   $(b.dataset.close).hidden = true; if (b.dataset.close === "sheet") openCode = null;
@@ -847,6 +922,7 @@ function saveSettings() {
 }
 const CCE_HOST = "https://www.certifiedcoinexchange.com";
 $("settingsBtn").hidden = !NATIVE;
+$("modeBtn").hidden = !NATIVE;   // order check uses the remembered case layout (Android app)
 $("startSettings").hidden = !NATIVE;
 $("settingsBtn").onclick = openSettings;
 $("importKeys").onclick = () => $("keysFile").click();
@@ -902,6 +978,7 @@ $("testLogin").onclick = async () => {
 const startedAt = Date.now();
 loadCoins();
 updateCase();
+updateOrderSummary();
 checkServer();
 
 if (!NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

@@ -29,5 +29,15 @@ for (const c of CASES) {
   check(Math.abs(s.slab.w - rw) < 0.25 * rw, `${c.name}: width ${Math.round(s.slab.w)} vs ${rw}`);
   check(Math.abs(oy0 - y0) < 0.08 * rh, `${c.name}: top ${Math.round(oy0)} vs ${y0}`);
 }
+// Two NGC labels side by side, close together: each keeps its own lines.
+{
+  const L = (x, d, g, c) => [{ text: d, corners: R(x, 400, x + 80, 420) }, { text: g, corners: R(x, 430, x + 50, 450) },
+                             { text: c, corners: R(x, 465, x + 100, 482) }];
+  const r = readSlabs([...L(30, "1921 10C", "AU 55", "2047300-004"), ...L(150, "1916 D 10C", "F 15", "1275103-001")], []);
+  const a = r.slabs.find((x) => x.cert === "2047300-004"), b = r.slabs.find((x) => x.cert === "1275103-001");
+  check(a.fields.grade === "AU55" && /1921/.test(a.fields.year) && b.fields.grade === "F15" && /1916/.test(b.fields.year),
+    `packed neighbours keep their own lines (${a.fields.year} ${a.fields.grade} / ${b.fields.year} ${b.fields.grade})`);
+}
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

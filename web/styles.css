@@ -142,3 +142,14 @@ html.native-cam #video { display: none; }
 .tag.remembered .box.slab { border-style: dashed; border-color: #e8b64c88; background: transparent; }
 
 .tag .t2 small.sub { display: block; font-size: 11px; font-weight: 500; color: #9fd1ff; }
+
+/* Order check mode */
+#modeBtn.on { background: var(--gold); color: #1a1405; }
+.tag.order-ok .box.slab { border-color: #3ccf8ecc; border-style: solid; }
+.tag.order-bad .box.slab { border-color: #ff6b6b; border-style: solid; border-width: 3px; background: #ff6b6b14; }
+.tag.order-unknown .box.slab { border-color: #9aa3b288; }
+.tag.order-ok .t2 { color: var(--green); }
+.tag.order-bad .t2 { color: var(--red); font-size: 13px; white-space: normal; }
+.tag.order-unknown .t2 { color: var(--muted); font-size: 13px; }
+.case-list li.bad .p { color: var(--red); white-space: normal; text-align: right; font-size: 13px; }
+.case-list li.good .p { color: var(--green); }
