@@ -24,15 +24,17 @@ _GRADE_PREFIXES = (
     "MS", "PR", "PF", "SP", "AU", "XF", "EF", "VF", "VG", "AG", "FR", "PO", "F", "G",
 )
 _DESIGNATIONS = (
-    "DMPL", "DCAM", "UCAM", "CAM", "PL", "RD", "RB", "BN", "FBL", "FB", "FS", "FH", "FT",
-    "DPL",
+    "ULTRA CAMEO", "CAMEO", "DMPL", "DCAM", "UCAM", "CAM", "DPL", "PL", "RD", "RB", "BN", "FBL", "FB",
+    "FS", "FH", "FT",
 )
+_DESIG_CANON = {"ULTRA CAMEO": "UCAM", "CAMEO": "CAM"}  # NGC wording -> PCGS-style
 
 GRADE_RE = re.compile(
     r"(?<![A-Z])(?P<prefix>" + "|".join(_GRADE_PREFIXES) + r")\s?-?\s?(?P<num>\d{1,2})"
     r"(?P<plus>\+)?(?:\s?(?P<desig>" + "|".join(_DESIGNATIONS) + r"))?(?![A-Z0-9])"
 )
-YEAR_RE = re.compile(r"\b(1[6-9]\d{2}|20\d{2})(?:/\d{1,2})?(?:-?(?P<mint>CC|[PDSOWC]))?\b")
+# Mint mark after a dash (PCGS "1916-D") or a space (NGC "1916 D").
+YEAR_RE = re.compile(r"\b(1[6-9]\d{2}|20\d{2})(?:/\d{1,2})?(?:[-\s]?(?P<mint>CC|[PDSOWC])\b)?")
 NGC_CERT_RE = re.compile(r"^(\d{6,8})-(\d{3})$")
 DIGITS_RE = re.compile(r"^\d{6,20}$")
 CERT_IN_TEXT_RE = re.compile(r"\b(\d{7,8}(?:-\d{3})?)\b")
@@ -165,7 +167,7 @@ def normalise_grade(text: str) -> tuple[Optional[str], Optional[int]]:
         return None, None
     grade = f"{prefix}{num}{m.group('plus') or ''}"
     if m.group("desig"):
-        grade += " " + m.group("desig")
+        grade += " " + _DESIG_CANON.get(m.group("desig"), m.group("desig"))
     return grade, num
 
 

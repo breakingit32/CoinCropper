@@ -172,7 +172,13 @@ from its barcode or the cert number read off the label:
   coins), plus CPG retail. Uses the Advanced tier (`ApiLevel=advanced`) and
   falls back to Basic (retail only) if the key doesn't have it. Cards show
   the CCE bid, else Greysheet, else the PCGS guide.
-* **NGC**: the dealer API token can be stored but isn't used yet.
+* **NGC and other slabs** (no PCGS #): the app finds the coin in the
+  **Greysheet catalog** from its label (year, mint, denomination, variety,
+  proof/business strike, designation such as BN/RB/RD, CAM, FB) and uses its
+  PCGS # for CCE, Greysheet prices and the PCGS guide. Catalog pages are kept
+  on the phone, so each series is downloaded once. (Android app; needs the
+  Greysheet key.)
+* **NGC** dealer API: the token can be stored but isn't used yet.
 
 Results are cached for a week (on the phone in the Android app), so a case
 costs each lookup once. When CCE has no bid, cards show the PCGS guide value.
@@ -193,6 +199,7 @@ pytest                          # server
 node tests/js/device.test.mjs   # app's on-device mode (needs Playwright)
 node tests/js/scene.test.mjs    # remembered case layout
 node tests/js/slab.test.mjs     # label model on real labels
+node tests/js/catalog.test.mjs  # PCGS # for NGC slabs from the Greysheet catalog
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)

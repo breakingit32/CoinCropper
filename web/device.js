@@ -4,6 +4,7 @@
 // login session lives on the phone like it would in Chrome.
 
 import { coinFromGrading, makeGrading, makeGreysheet } from "./grading.js";
+import { makeCatalog } from "./catalog.js";
 import {
   buildSearchUrl, emptyCoin, merge, mockBids, normaliseGrade,
   parseBarcode, parseLabelText, parseMarketGrid, parseQuotes, quotesForGrade, summarise,
@@ -159,6 +160,7 @@ export function makeDeviceBackend(getSettings) {
   const cache = new Map();
   const grading = makeGrading({ http, getKeys: () => gradingKeys(getSettings()) });
   const greysheet = makeGreysheet({ http, getKeys: () => gradingKeys(getSettings()) });
+  const catalog = makeCatalog({ http, getKeys: () => gradingKeys(getSettings()) });
 
   function cce() {
     const s = getSettings();
@@ -196,7 +198,20 @@ export function makeDeviceBackend(getSettings) {
     }
     merge(coin, detected);
     coin.notes.push(...notes);
-    return { coin, grading: g };
+    // No PCGS number (NGC and other slabs): find it in the Greysheet catalog
+    // from the label (year, mint, denomination, variety, strike, designation).
+    let match = null;
+    if (!coin.pcgs_no && coin.year && catalog.configured()) {
+      try {
+        match = await catalog.lookup({ year: coin.year, mint_mark: coin.mint_mark, description: detected.description || coin.description, grade: coin.grade });
+        if (match?.pcgs_no) {
+          coin.pcgs_no = match.pcgs_no;
+          coin.notes.push(`PCGS #${match.pcgs_no} from the Greysheet catalog (${match.name})`);
+        } else if (match) coin.notes.push(`Greysheet catalog: ${match.name} (no PCGS #)`);
+        else coin.notes.push("Not found in the Greysheet catalog");
+      } catch (e) { coin.notes.push(e.message); }
+    }
+    return { coin, grading: g, match };
   }
 
   return {
@@ -205,7 +220,7 @@ export function makeDeviceBackend(getSettings) {
     async testLogin() { const c = cce(); if (!c) throw new Error("Fill in your CCE user id and password first"); await c.login(); },
     lastCcePage() { return client?.lastPage || null; },
     async lookup(req) {
-      const { coin, grading: g } = await identify(req);
+      const { coin, grading: g, match } = await identify(req);
       const c = cce();
       let bids;
       if (!c) bids = await mockBids(coin);
@@ -220,10 +235,10 @@ export function makeDeviceBackend(getSettings) {
       }
       let grey = null, greyStatus;
       if (!greysheet.configured()) greyStatus = "Add your Greysheet API key and token in Settings (⚙ → Grading APIs).";
-      else if (!coin.pcgs_no || !coin.grade_num) greyStatus = `Needs the coin's ${!coin.pcgs_no ? "PCGS #" : "grade"} to look it up.`;
+      else if (!(coin.pcgs_no || match?.gsid) || !coin.grade_num) greyStatus = `Needs the coin's ${!coin.grade_num ? "grade" : "PCGS # (not found in the catalog from its label)"} to look it up.`;
       else {
         try {
-          grey = await greysheet.price({ pcgs_no: coin.pcgs_no, grade_num: coin.grade_num, cac: g?.cac });
+          grey = await greysheet.price({ pcgs_no: coin.pcgs_no, gsid: coin.pcgs_no ? null : match?.gsid, grade_num: coin.grade_num, cac: g?.cac });
           greyStatus = !grey ? `Greysheet has no listing for PCGS #${coin.pcgs_no}.` : grey.none ? `Greysheet has no price for grade ${coin.grade_num}.` : "ok";
         } catch (e) { greyStatus = e.message; }
       }

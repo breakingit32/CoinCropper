@@ -4,10 +4,12 @@
 export const SERVICES = ["PCGS", "NGC", "CACG", "ANACS", "ICG"];
 
 const PREFIXES = ["MS", "PR", "PF", "SP", "AU", "XF", "EF", "VF", "VG", "AG", "FR", "PO", "F", "G"];
-const DESIGS = ["DMPL", "DCAM", "UCAM", "CAM", "PL", "RD", "RB", "BN", "FBL", "FB", "FS", "FH", "FT", "DPL"];
+const DESIGS = ["ULTRA CAMEO", "CAMEO", "DMPL", "DCAM", "UCAM", "CAM", "DPL", "PL", "RD", "RB", "BN", "FBL", "FB", "FS", "FH", "FT"];
+const DESIG_CANON = { "ULTRA CAMEO": "UCAM", CAMEO: "CAM" };   // NGC wording -> PCGS-style
 const GRADE_RE = new RegExp(
   `(?<![A-Z])(${PREFIXES.join("|")})\\s?-?\\s?(\\d{1,2})(\\+)?(?:\\s?(${DESIGS.join("|")}))?(?![A-Z0-9])`);
-const YEAR_RE = /\b(1[6-9]\d{2}|20\d{2})(?:\/\d{1,2})?(?:-?(CC|[PDSOWC]))?\b/;
+// Mint mark after a dash (PCGS "1916-D") or a space (NGC "1916 D").
+const YEAR_RE = /\b(1[6-9]\d{2}|20\d{2})(?:\/\d{1,2})?(?:[-\s]?(CC|[PDSOWC])\b)?/;
 const NGC_CERT_RE = /^(\d{6,8})-(\d{3})$/;
 const DIGITS_RE = /^\d{6,20}$/;
 const CERT_IN_TEXT_RE = /\b(\d{7,8}(?:-\d{3})?)\b/;
@@ -55,7 +57,7 @@ export function normaliseGrade(text) {
   const num = parseInt(m[2], 10);
   if (num < 1 || num > 70) return [null, null];
   let grade = `${prefix}${num}${m[3] || ""}`;
-  if (m[4]) grade += " " + m[4];
+  if (m[4]) grade += " " + (DESIG_CANON[m[4]] || m[4]);
   return [grade, num];
 }
 
