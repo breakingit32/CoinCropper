@@ -8,6 +8,7 @@
 // cached on the phone for good, so each series is downloaded once.
 
 import { GREYSHEET } from "./grading.js";
+import { fixOcrDenom } from "./core.js";
 
 // ------------------------------------------------------------- label text -> wanted coin
 
@@ -41,7 +42,7 @@ const DESIG_WORDS = { BN: "BN", RB: "RB", RD: "RD", CAM: "CAM", CAMEO: "CAM", DC
  * "1937 D 3 LEGS 5C", "1955 DOUBLED DIE OBV 1C", "1900-O/CC S$1".
  */
 export function wantedFromLabel(c) {
-  const line = String(c.description || "").toUpperCase().replace(/\s+/g, " ").trim();
+  const line = fixOcrDenom(String(c.description || "").toUpperCase().replace(/\s+/g, " ").trim());
   const ym = /\b(1[6-9]\d{2}|20\d{2})(?:\/\d{1,2})?/.exec(line);
   const year = c.year || (ym && ym[1]);
   if (!year) return null;

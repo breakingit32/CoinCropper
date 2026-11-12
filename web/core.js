@@ -34,6 +34,12 @@ export function labelAnchor(line) {
   return null;
 }
 
+// OCR often reads "$" as "S": "1885 O S1" -> "1885 O $1". Only a bare S+digits
+// after the year (S$1 and a mint "S" are left alone).
+export function fixOcrDenom(line) {
+  return String(line || "").replace(/(\b(?:1[6-9]\d{2}|20\d{2})\b.*?)\bS(\d{1,2}(?:\.\d{2})?)\b/i, "$1$$$2");
+}
+
 export function emptyCoin(raw = "") {
   return { raw, service: null, cert: null, pcgs_no: null, grade: null, grade_num: null,
     year: null, mint_mark: null, description: null, notes: [] };
@@ -124,13 +130,14 @@ export function parseLabelText(text) {
     }
   } else {
     let m = CERT_IN_TEXT_RE.exec(upper); if (m) info.cert = m[1];
+    if (info.cert && !info.service && NGC_CERT_RE.test(info.cert)) info.service = "NGC";   // 1234567-001 form
     m = PCGS_NO_IN_TEXT_RE.exec(upper); if (m) info.pcgs_no = m[1];
   }
   for (const ln of upper.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
     const y = YEAR_RE.exec(ln);
     if (y) {
       info.year = y[1]; info.mint_mark = y[2] || null;
-      info.description = ln.replace(/\s+/g, " ").replace(/^[ .,-]+|[ .,-]+$/g, "");
+      info.description = fixOcrDenom(ln.replace(/\s+/g, " ").replace(/^[ .,-]+|[ .,-]+$/g, ""));
       break;
     }
   }

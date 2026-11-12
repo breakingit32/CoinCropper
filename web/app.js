@@ -220,8 +220,8 @@ async function lookup(key, extra = {}) {
     const result = await backendLookup({ ...coin.overrides, code: coin.code });
     if (seq !== coin.seq) return;           // a newer lookup for this coin is running
     coin.result = result;
-    coin.status = result.bids.error ? "error" : "ok";
-    coin.error = result.bids.error;
+    coin.status = "ok";                          // other prices may still be there
+    coin.error = result.bids.error ? `CCE: ${result.bids.error}` : null;
     coin.at = Date.now();
   } catch (e) {
     if (seq !== coin.seq) return;
@@ -508,7 +508,7 @@ function renderTags() {
     t2.classList.toggle("guide", high == null && fallback != null);
     const label = coin.status === "loading" ? "Looking up…" :
       coin.status === "error" ? (fallback || "Lookup failed") :
-      high != null ? `Bid ${money(high)}` : fallback || "No bids";
+      high != null ? `Bid ${money(high)}` : fallback || (coin.error ? "No price · tap" : "No bids");
     const extra = coin.status !== "loading" && high != null && grey != null ? ` · Grey ${money(grey)}` : "";
     if (t2.dataset.v !== label + extra) {
       t2.dataset.v = label + extra;

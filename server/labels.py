@@ -200,6 +200,8 @@ def parse_label_text(text: str) -> SlabInfo:
     m = CERT_IN_TEXT_RE.search(upper)
     if m:
         info.cert = m.group(1)
+        if not info.service and NGC_CERT_RE.match(info.cert):
+            info.service = "NGC"  # 1234567-001 form
 
     m = PCGS_NO_IN_TEXT_RE.search(upper)
     if m:

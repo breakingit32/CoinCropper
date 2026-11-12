@@ -14,7 +14,7 @@
 // Everything is measured in the anchor line's own frame (along the line = u,
 // down the label = v, in units of its height), so slanted or rotated slabs work.
 
-import { labelAnchor, normaliseGrade } from "./core.js";
+import { fixOcrDenom, labelAnchor, normaliseGrade } from "./core.js";
 
 // Slab proportions relative to the label (typical PCGS/NGC holders; tune here).
 export const LAYOUT = {
@@ -98,7 +98,7 @@ function readFields(members, anchorText, H) {
     : Math.min(...members.filter((m) => !SERVICE_RE.test(m.text)).map((m) => m.cv));
   const top = members.filter((m) => Math.abs(m.cv - rowV) < 0.8 * H);
   if (yearLine) {
-    f.year = fixYear(yearLine.text.trim());
+    f.year = fixOcrDenom(fixYear(yearLine.text.trim()));
     // NGC-style "1916 D 10C": denomination on the same line as the year.
     const d = DENOM_RE.exec(f.year.slice(f.year.search(YEAR_RE) + 4));
     if (d) { f.denomination = d[0].trim(); f.year = f.year.replace(d[0], "").trim(); }

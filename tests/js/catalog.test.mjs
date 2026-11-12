@@ -9,7 +9,10 @@ const C = (Gsid, PcgsNumber, CoinDate, MintMark, Den, extra = {}) => ({ Gsid, Pc
   StrikeType: "Business", Name: `${CoinDate} ${Den}`, ...extra });
 const TREE = {
   1: [node(10, "U.S. Coins", 4), node(11, "World Coins", 3), node(12, "U.S. Paper Money", 5)],
-  10: [node(19, "Half Cents", 1), node(20, "Small Cents", 2), node(21, "Half Dimes", 1), node(22, "Dimes", 3), node(23, "Nickels", 1)],
+  10: [node(19, "Half Cents", 1), node(20, "Small Cents", 2), node(21, "Half Dimes", 1), node(22, "Dimes", 3), node(23, "Nickels", 1),
+       node(24, "Gold Dollars", 1), node(25, "Silver Dollars", 1)],
+  24: [node(70, "Gold Dollars 1849-1889", 0, 1)],
+  25: [node(80, "Morgan Dollars (1878-1921)", 0, 2)],
   20: [node(40, "Lincoln Cents, Wheat Reverse (1909-1958)", 0, 3), node(41, "Indian Cents (1859-1909)", 0, 1)],
   21: [node(50, "Seated Half Dimes 1837-1873", 0, 1)],
   22: [node(30, "Capped Bust Dimes 1809-1837", 0, 2), node(31, "Mercury Dimes (1916-1945)", 0, 5), node(32, "Mercury Dimes, Proof", 0, 1)],
@@ -26,6 +29,8 @@ const ITEMS = {
   41: [C(410, "2238", "1909-S", "S", "1C", { Desg: "BN" })],
   50: [C(500, "4400", "1834", "", "H10C")],
   60: [C(600, "3976", "1937-D", "D", "5C"), C(601, "3980", "1937-D", "D", "5C", { Variety: "3 Legs" })],
+  70: [C(700, "7550", "1885", "", "G$1")],
+  80: [C(800, "7166", "1885-O", "O", "$1"), C(801, "7167", "1885-O", "O", "$1", { Desg: "DMPL" })],
 };
 let calls = 0;
 const http = async (o) => {
@@ -51,6 +56,7 @@ const T = [
   ["1834 10C", "MS63", "4532", "1834 Capped Bust dime (not the half dime)"],
   ["1909 S VDB 1C", "AU53 BN", "2425", "1909-S VDB cent BN (not RB, not plain 1909-S)"],
   ["1937 D 3 LEGS 5C", "XF45", "3980", "1937-D 3 Legs nickel (not the plain 1937-D)"],
+  ["1885 O S1", "MS65", "7166", "1885-O Morgan read as 'S1' by OCR (not gold, not DMPL)"],
 ];
 for (const [description, grade, want, what] of T) {
   const r = await cat.lookup({ year: description.slice(0, 4), description, grade });

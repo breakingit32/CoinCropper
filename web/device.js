@@ -130,7 +130,11 @@ export class CCEDirect {
       if (!quotes.length) res.note = `No ${svc || ""} bids for ${coin.grade || coin.grade_num} on CCE`;
       return withServiceHigh(res, svc);
     }
-    if (!this.searchUrl) throw new Error("Need the coin's PCGS number to open it on CCE (add PCGS API keys or fill in PCGS #)");
+    if (!this.searchUrl) {
+      const res = summarise("cce", []);
+      res.note = "CCE: no PCGS # for this coin yet, so it can't be opened on CCE";
+      return res;
+    }
     const page = await this.get(buildSearchUrl(this.searchUrl, this.base, coin));
     const grid = parseMarketGrid(page.html);
     const quotes = Object.keys(grid.grades).length && coin.grade_num
