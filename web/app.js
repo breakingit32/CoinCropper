@@ -508,13 +508,31 @@ function renderTags() {
     t2.classList.toggle("guide", high == null && fallback != null);
     const label = coin.status === "loading" ? "Looking up…" :
       coin.status === "error" ? (fallback || "Lookup failed") :
-      high != null ? `Bid ${money(high)}` : fallback || (coin.error ? "No price · tap" : "No bids");
+      high != null ? `Bid ${money(high)}` : fallback || noPriceReason(coin);
     const extra = coin.status !== "loading" && high != null && grey != null ? ` · Grey ${money(grey)}` : "";
     if (t2.dataset.v !== label + extra) {
       t2.dataset.v = label + extra;
       t2.innerHTML = esc(label) + (extra ? `<small class="sub">${esc(extra)}</small>` : "");
     }
   }
+}
+
+// Short reason on the card when there's no price at all, so one look says
+// which step is missing.
+function noPriceReason(coin) {
+  const r = coin.result || {};
+  const notes = (r.coin?.notes || []).join(" ");
+  const gs = r.greysheet_status || "";
+  if (/Not found in the Greysheet catalog/i.test(notes)) return "Not in Greysheet catalog";
+  if (/catalog:.*(denied|refused|section not found|HTTP)/i.test(notes)) return "Catalog: " + (/section not found/.test(notes) ? "layout?" : "refused");
+  if (/Add your Greysheet/i.test(gs)) return "No Greysheet key";
+  if (/refused|denied/i.test(gs)) return "Greysheet key refused";
+  if (/no price for grade/i.test(gs)) return "No Greysheet price for grade";
+  if (/no listing/i.test(gs)) return "Not listed on Greysheet";
+  if (/Needs the coin's/i.test(gs)) return "No PCGS # found";
+  if (gs && gs !== "ok") return "Greysheet: " + gs.slice(0, 28);
+  if (coin.error) return "No price · tap";
+  return "No bids";
 }
 
 // Cards of slabs read in this frame win; a remembered card that would cover

@@ -194,11 +194,12 @@ export function makeCatalog({ http, getKeys, storage = globalThis.localStorage }
       if (!w || !w.denom || !this.configured()) return null;
       const key = `m:${w.year}|${w.mint}|${w.denom}|${w.variety}|${w.proof}|${w.desig}`;
       const hit = get(key);
-      if (hit !== null) return hit.none ? null : hit;
+      // A miss is retried after a day (an earlier version or a misread may have caused it).
+      if (hit !== null && !(hit.none && Date.now() - (hit.at || 0) > 864e5)) return hit.none ? null : hit;
       calls = 0;
       const best = await find(w);
       const out = best ? { pcgs_no: best.item.PcgsNumber ? String(best.item.PcgsNumber).replace(/^0+/, "") : null,
-        gsid: best.item.Gsid, name: best.item.Name, ngc_id: best.item.NgcId || null, node: best.node, score: best.score } : { none: true };
+        gsid: best.item.Gsid, name: best.item.Name, ngc_id: best.item.NgcId || null, node: best.node, score: best.score } : { none: true, at: Date.now() };
       set(key, out);
       return out.none ? null : out;
     },
