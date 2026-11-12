@@ -524,7 +524,8 @@ function noPriceReason(coin) {
   const notes = (r.coin?.notes || []).join(" ");
   const gs = r.greysheet_status || "";
   if (/Not found in the Greysheet catalog/i.test(notes)) return "Not in Greysheet catalog";
-  if (/catalog:.*(denied|refused|section not found|HTTP)/i.test(notes)) return "Catalog: " + (/section not found/.test(notes) ? "layout?" : "refused");
+  const cat = /Greysheet catalog[^:]*: ([^·]+)/i.exec(notes);
+  if (cat) return /section not found/i.test(cat[1]) ? "Catalog: layout?" : "Catalog: " + cat[1].trim().slice(0, 30);
   if (/Add your Greysheet/i.test(gs)) return "No Greysheet key";
   if (/refused|denied/i.test(gs)) return "Greysheet key refused";
   if (/no price for grade/i.test(gs)) return "No Greysheet price for grade";

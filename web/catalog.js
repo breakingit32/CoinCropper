@@ -97,17 +97,27 @@ export function makeCatalog({ http, getKeys, storage = globalThis.localStorage }
   const set = (k, v) => { try { storage?.setItem("gsc:" + k, JSON.stringify(v)); } catch { /* full */ } };
   let calls = 0;
 
+  // Advanced tier first (full catalog); if Greysheet refuses or errors, try the
+  // same request without it once. The error kept is the most specific one.
+  let level = "advanced";
   async function api(name, params) {
     const { gsKey, gsToken } = getKeys();
-    const q = new URLSearchParams({ ...params, ApiLevel: "advanced" });
-    calls++;
-    const r = await http({ url: `${GREYSHEET}/${name}?${q}`, method: "GET", responseType: "json",
-      headers: { "x-api-token": gsToken, "x-api-key": gsKey, Accept: "application/json" } });
-    const data = typeof r.data === "string" ? JSON.parse(r.data || "null") : r.data;
-    if (r.status === 401 || r.status === 403 || data?.PermitAccess === false)
-      throw new Error(`Greysheet catalog: ${data?.AccessDeniedMessage || data?.ResponseStatus?.Message || "access denied"}`);
-    if (r.status !== 200) throw new Error(`Greysheet catalog HTTP ${r.status}`);
-    return data?.Data || [];
+    let lastErr = null;
+    for (const lv of level === "advanced" ? ["advanced", ""] : [""]) {
+      const q = new URLSearchParams({ ...params, ...(lv ? { ApiLevel: lv } : {}) });
+      calls++;
+      const r = await http({ url: `${GREYSHEET}/${name}?${q}`, method: "GET", responseType: "json",
+        headers: { "x-api-token": gsToken, "x-api-key": gsKey, Accept: "application/json" } });
+      let data = r.data;
+      if (typeof data === "string") { try { data = JSON.parse(data || "null"); } catch { data = null; } }
+      const msg = data?.AccessDeniedMessage || data?.ErrorText || data?.ResponseStatus?.Message || data?.ResponseStatus?.ErrorCode;
+      if (r.status === 200 && data?.PermitAccess !== false && !data?.ErrorText) {
+        if (!lv) level = "";                      // remember: this key works without the advanced tier
+        return data?.Data || [];
+      }
+      lastErr = new Error(`Greysheet catalog ${name.replace(/Request$/, "")}: ${msg || "HTTP " + r.status}${msg && r.status !== 200 ? ` (HTTP ${r.status})` : ""}`);
+    }
+    throw lastErr;
   }
 
   const slimNode = (n) => ({ id: n.Id, name: n.Name || "", nodes: n.NodeChildrenCountLive || 0, items: n.CollectibleChildrenCountLive || 0 });

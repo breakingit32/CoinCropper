@@ -71,5 +71,14 @@ const bad = makeCatalog({ http, getKeys: () => ({ gsKey: "X", gsToken: "T" }), s
 let err = null; try { await bad.lookup({ year: "1916", description: "1916 D 10C", grade: "F15" }); } catch (e) { err = e.message; }
 check(/bad key/.test(err || ""), `refused key reported (${err})`);
 
+// Catalog refuses the advanced tier but answers without it.
+let seen = [];
+const picky = makeCatalog({ getKeys: () => ({ gsKey: "K", gsToken: "T" }), storage: { getItem: () => null, setItem() {} },
+  http: async (o) => { seen.push(o.url.includes("ApiLevel=advanced")); return o.url.includes("ApiLevel=advanced")
+    ? { status: 400, data: { ResponseStatus: { ErrorCode: "ArgumentException", Message: "ApiLevel not allowed" } } } : http(o); } });
+const pr = await picky.lookup({ year: "1916", description: "1916 D 10C", grade: "F15" });
+check(pr?.pcgs_no === "4908" && seen[0] === true && seen.filter((x) => x).length === 1,
+  "advanced tier refused: retried without it, then stays without it");
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
