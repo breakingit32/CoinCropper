@@ -16,17 +16,29 @@ API = "https://api.pcgs.com/publicapi/coindetail/GetCoinFactsByGrade?PCGSNo={n}&
 
 
 def call(key, n):
+    """Description dict, None if PCGS says there's no such coin, "spent" if the
+    key is refused/out of calls, or "error" (timeouts etc.: try again later)."""
+    errors = 0
     for g in (60, 45, 65, 20):
-        req = urllib.request.Request(API.format(n=n, g=g), headers={"Authorization": f"bearer {key}", "Accept": "application/json", "User-Agent": "CoinCropper-index/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                d = json.loads(r.read().decode())
-        except urllib.error.HTTPError as e:
-            if e.code in (401, 403, 429):
-                return "spent"
+        for attempt in range(3):
+            req = urllib.request.Request(API.format(n=n, g=g), headers={"Authorization": f"bearer {key}", "Accept": "application/json",
+                                                                        "User-Agent": "CoinCropper-index/1.0"})
+            try:
+                with urllib.request.urlopen(req, timeout=40) as r:
+                    d = json.loads(r.read().decode())
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403, 429):
+                    return "spent"
+                d = None
+                break
+            except Exception:
+                errors += 1
+                time.sleep(3 * (attempt + 1))
+                d = None
+        else:
             continue
-        except Exception:
-            time.sleep(1)
+        if d is None:
             continue
         msg = f"{d.get('Message', '')} {d.get('ServerMessage', '')}".lower()
         if any(w in msg for w in ("limit", "quota", "exceed", "denied")):
@@ -36,7 +48,7 @@ def call(key, n):
                     "m": d.get("MintMark") or "", "g": d.get("Designation") or "",
                     "v": ", ".join(x for x in (d.get("MajorVariety"), d.get("MinorVariety"), d.get("DieVariety")) if x),
                     "s": d.get("SeriesName") or ""}
-    return None
+    return "error" if errors else None
 
 
 def main():
@@ -44,7 +56,7 @@ def main():
     ap.add_argument("keys")
     ap.add_argument("--per-key", type=int, default=700)
     ap.add_argument("--max-digits", type=int, default=5)
-    ap.add_argument("--threads-per-key", type=int, default=2)
+    ap.add_argument("--threads-per-key", type=int, default=1)
     a = ap.parse_args()
     keys = open(a.keys).read().split()
     table = json.load(open(ROOT / "web" / "ngc-pcgs.json"))
@@ -102,6 +114,8 @@ def main():
             with lock:
                 budget[key] = 0
             return False
+        if r == "error":   # timeouts: leave it for a later run
+            return True
         with lock:
             if r:
                 index[r["n"]] = {k: v for k, v in r.items() if k != "n" and v not in ("", None)}
