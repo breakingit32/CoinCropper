@@ -153,3 +153,29 @@ html.native-cam #video { display: none; }
 .tag.order-unknown .t2 { color: var(--muted); font-size: 13px; }
 .case-list li.bad .p { color: var(--red); white-space: normal; text-align: right; font-size: 13px; }
 .case-list li.good .p { color: var(--green); }
+
+/* One-coin mode */
+#guide { position: absolute; inset: 0; pointer-events: none; }
+#guide .g-slab { position: absolute; border: 3px dashed #ffffffb0; border-radius: 22px;
+  box-shadow: 0 0 0 9999px #00000055; transition: border-color .2s; }
+#guide .g-label { position: absolute; left: 7%; right: 7%; top: 5%; height: 24%; border: 2px solid #ffffff60; border-radius: 8px; }
+#guide .g-hint { position: absolute; left: 0; right: 0; top: 64px; text-align: center; font-size: 13px; color: #fff;
+  text-shadow: 0 1px 3px #000; }
+#guide.seeing .g-slab { border-color: #e8b64c; }
+#guide.reading .g-slab { border-color: #e8b64c; border-style: solid; }
+#guide.found .g-slab { border-color: var(--green); border-style: solid; }
+.single { position: absolute; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 100px); z-index: 3;
+  background: #0d1017ee; border: 1px solid #ffffff22; border-radius: 16px; padding: 12px 14px; cursor: pointer; }
+.single .s-title { font-size: 18px; font-weight: 700; }
+.single .s-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.single .s-prices { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-top: 10px; }
+.single .s-prices div { background: var(--panel-2); border-radius: 10px; padding: 8px 10px; }
+.single .s-prices span { display: block; color: var(--muted); font-size: 11px; }
+.single .s-prices b { font-size: 18px; }
+.single .s-prices .bid b { color: var(--green); }
+.single .s-prices .grey b { color: #9fd1ff; }
+.single .s-prices .none b { font-size: 14px; color: var(--muted); font-weight: 500; }
+.single .s-note { color: var(--red); font-size: 12px; margin-top: 6px; }
+.single .s-note:empty { display: none; }
+.toast { position: absolute; left: 50%; top: 120px; transform: translateX(-50%); z-index: 5; background: #000c;
+  color: #fff; padding: 8px 14px; border-radius: 99px; font-size: 14px; pointer-events: none; }

@@ -17,6 +17,19 @@
     <video id="video" playsinline muted autoplay></video>
     <div id="overlay" aria-live="polite"></div>
 
+    <!-- One-coin mode: slab-shaped guide and the result -->
+    <div id="guide" hidden>
+      <div class="g-slab"><div class="g-label"></div></div>
+      <div class="g-hint">Line up a slab in the outline</div>
+    </div>
+    <section id="single" class="single" hidden>
+      <div class="s-title" id="sTitle"></div>
+      <div class="s-sub" id="sSub"></div>
+      <div class="s-prices" id="sPrices"></div>
+      <div class="s-note" id="sNote"></div>
+    </section>
+    <div id="toast" class="toast" hidden></div>
+
     <header id="topbar">
       <div class="brand">CoinCropper</div>
       <div class="top-right">

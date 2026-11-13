@@ -77,7 +77,13 @@ because browsers won't let one site read another site's pages.)
   coin again (even after restarting the app) doesn't look it up again; bids
   older than 12 hours are refreshed once when the coin is seen. **Clear** in
   the case list forgets everything.
-* **Order check (⇅ button):** checks that the case is in the right order
+* **Modes (button at the top): Case prices ($) → One coin (▢) → Order check (⇅).**
+* **One coin (▢):** a slab-shaped outline in the middle of the screen; only the
+  slab lined up in it is read, and a large panel shows the coin, cert, CAC,
+  CCE bid/ask, Greysheet, CPG retail and PCGS guide (or why a price is
+  missing). The outline turns yellow while reading and green when identified;
+  tap the panel for the full details.
+* **Order check (⇅):** checks that the case is in the right order
   instead of pricing. Slabs are read row by row (top to bottom, left to
   right) and must run in Red Book order by denomination (½C, 1C, 2C, 3CS,
   3CN, 5C, H10C, 10C, 20C, 25C, 50C, $1, gold), date, mint (P, C, CC, D, O, S,

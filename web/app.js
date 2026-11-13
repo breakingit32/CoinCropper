@@ -300,7 +300,7 @@ function updateCoin(key, f) {
     changed = true;
   }
   // Identified in order-check mode (no prices yet): look up prices now.
-  if (!changed && mode === "price" && coin.result?.order_only && coin.status === "ok") changed = true;
+  if (!changed && mode !== "order" && coin.result?.order_only && coin.status === "ok") changed = true;
   // Bids from an earlier session go stale: refresh once when seen again.
   if (!changed && coin.status === "ok" && coin.at && Date.now() - coin.at > REFRESH_BIDS_MS) changed = true;
   if (changed && coin.status !== "loading") lookup(key);
@@ -396,6 +396,7 @@ export function handleFrame(ev) {
   }
 
   snapAngles(dets.map((d) => d.slab));   // one case, one angle
+  if (mode === "single") { singleFrame(dets); return; }
   const { visible, accepted } = scene.update(dets);
   for (const d of dets) {
     const key = scene.resolve(d.key);
@@ -435,6 +436,8 @@ async function startNativeScanner() {
     throw e;
   }
   nativeCam = true;
+  layoutGuide();
+  setTimeout(applyMode, 0);
   $("torchBtn").hidden = !res?.torch;
   $("ocrBtn").hidden = true;   // label text is read live in this mode
   return true;
@@ -562,7 +565,12 @@ function declutter() {
 
 // ---------------------------------------------------------------- order check mode
 
-let mode = store("mode") === "order" ? "order" : "price";
+// Modes: "price" (whole case, cards on every slab), "single" (one slab in a
+// guide outline, big result panel), "order" (case order check).
+const MODES = ["price", "single", "order"];
+const MODE_NAMES = { price: "Case prices", single: "One coin", order: "Order check" };
+const MODE_ICONS = { price: "$", single: "▢", order: "⇅" };
+let mode = MODES.includes(store("mode")) ? store("mode") : "price";
 let orderState = null, orderAt = 0;
 
 // Order of the slabs in the part of the case in view (the island seen last),
@@ -610,12 +618,90 @@ function renderOrderList() {
 }
 
 $("modeBtn").onclick = () => {
-  mode = mode === "order" ? "price" : "order";
+  mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
   store("mode", mode);
-  for (const c of coins.values()) if (mode === "price" && c.result?.order_only) c.status = "ok";   // re-priced when seen
   updateOrderSummary();
+  applyMode();
+  toast(MODE_NAMES[mode]);
   if (!$("caseSheet").hidden) (mode === "order" ? renderOrderList() : updateCase());
 };
+
+let toastTimer = null;
+function toast(text) {
+  const el = $("toast");
+  el.textContent = text; el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), 1400);
+}
+
+function applyMode() {
+  $("modeBtn").textContent = MODE_ICONS[mode];
+  $("modeBtn").title = MODE_NAMES[mode];
+  $("modeBtn").classList.toggle("on", mode !== "price");
+  const single = mode === "single";
+  $("guide").hidden = !single || !nativeCam;
+  $("single").hidden = !single || !singleKey;
+  overlay.hidden = single;
+  if (!single) singleKey = null;
+}
+
+// ---------------------------------------------------------------- one-coin mode
+
+let singleKey = null;            // coin shown in the result panel
+let singleCandidate = null, singleCount = 0;
+
+// The guide: a slab-shaped outline centred on the screen (holder ~1.55 tall per wide).
+function guideRect() {
+  const W = innerWidth, H = innerHeight;
+  const w = Math.min(W * 0.74, (H - 240) / 1.55), h = w * 1.55;
+  return { x: (W - w) / 2, y: Math.max(70, (H - h) / 2 - 40), w, h };
+}
+function layoutGuide() {
+  const r = guideRect(), el = $("guide").firstElementChild;
+  Object.assign(el.style, { left: r.x + "px", top: r.y + "px", width: r.w + "px", height: r.h + "px" });
+}
+addEventListener("resize", layoutGuide);
+
+// From one frame's detections, the slab inside the guide (closest to its centre).
+function singleFrame(dets) {
+  const r = guideRect(), gx = r.x + r.w / 2, gy = r.y + r.h / 2;
+  const inside = dets.filter((d) => {
+    const s = d.slab;
+    return s.cx > r.x - r.w * 0.15 && s.cx < r.x + r.w * 1.15 && s.cy > r.y - r.h * 0.15 && s.cy < r.y + r.h * 1.15;
+  });
+  const best = inside.sort((a, b) => Math.hypot(a.slab.cx - gx, a.slab.cy - gy) - Math.hypot(b.slab.cx - gx, b.slab.cy - gy))[0];
+  const g = $("guide");
+  g.classList.toggle("seeing", !!best);
+  if (!best) return;
+  const key = aliases.get(best.key) || best.key;
+  // Text-only reads must repeat; a new slab replaces the shown one after 2 frames.
+  if (key === singleCandidate) singleCount++; else { singleCandidate = key; singleCount = 1; }
+  if (singleCount < 2 && key !== singleKey) return;
+  updateCoin(key, best);
+  if (singleKey !== key) { singleKey = key; renderSingle(); }
+}
+
+function renderSingle() {
+  const coin = singleKey && coins.get(singleKey);
+  $("single").hidden = !coin || mode !== "single";
+  const g = $("guide");
+  g.classList.toggle("found", !!coin && coin.status === "ok");
+  g.classList.toggle("reading", !!coin && coin.status === "loading");
+  if (!coin) return;
+  const r = coin.result || {}, c = r.coin || {}, b = r.bids || {}, gr = r.grading || {}, gs = r.greysheet || {};
+  $("sTitle").textContent = coin.status === "loading" && !r.coin ? "Reading…" : coinTitle(coin);
+  $("sSub").textContent = [c.service, c.cert && `cert ${c.cert}`, c.pcgs_no && `PCGS #${c.pcgs_no}`,
+    gr.cac && `CAC ${gr.cac}`].filter(Boolean).join(" · ");
+  const row = (label, v, cls = "") => `<div class="${cls}"><span>${esc(label)}</span><b>${esc(v)}</b></div>`;
+  const grey = greyValue(r.greysheet);
+  $("sPrices").innerHTML = coin.status === "loading" ? row("Looking up", "…")
+    : [b.high_bid != null && row("CCE bid", money(b.high_bid), "bid"), b.low_ask != null && row("CCE ask", money(b.low_ask)),
+       grey != null && row(gs.cac && gs.grey_cac ? "Greysheet (CAC)" : "Greysheet", money(grey), "grey"),
+       gs.cpg != null && row("CPG retail", money(gs.cpg)), gr.price_guide != null && row("PCGS guide", money(gr.price_guide))]
+      .filter(Boolean).join("") || row("Price", noPriceReason(coin), "none");
+  $("sNote").textContent = coin.error || "";
+}
+$("single").onclick = () => singleKey && openSheet(singleKey);
 
 function frame() {
   if (mode === "order" && performance.now() - orderAt > 250) {
@@ -624,6 +710,7 @@ function frame() {
     updateOrderSummary();
     if (!$("caseSheet").hidden) renderOrderList();
   }
+  if (mode === "single") renderSingle();
   renderTags(); declutter(); requestAnimationFrame(frame);
 }
 
@@ -984,6 +1071,7 @@ const startedAt = Date.now();
 loadCoins();
 updateCase();
 updateOrderSummary();
+applyMode();
 checkServer();
 
 if (!NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

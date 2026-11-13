@@ -446,7 +446,8 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
     r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
   });
   await p4.goto("https://localhost/");
-  await p4.click("#modeBtn");
+  await p4.click("#modeBtn");   // -> One coin
+  await p4.click("#modeBtn");   // -> Order check
   await p4.click("#startBtn");
   check(await p4.isVisible("#orderSummary") && await p4.evaluate(() => localStorage.getItem("mode")) === "order", "order mode switched on");
   const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
@@ -470,6 +471,40 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   const priced = await p4.evaluate(() => window.__calls.filter((u) => /greysheet|certifiedcoinexchange/.test(u)).length);
   check(priced === 0, "order mode makes no price lookups");
   await p4.close();
+}
+
+// 13. One-coin mode: slab guide; only the slab inside it is read.
+{
+  const p5 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
+  p5.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
+  await p5.addInitScript(() => { localStorage.setItem("mode", "single"); window.__l = []; window.Capacitor = { isNativePlatform: () => true,
+    addListener: (p, e, cb) => { window.__l.push(cb); return {}; },
+    nativePromise: async (p) => (p === "SlabScanner" ? { torch: false } : { status: 404, data: "" }) }; });
+  await p5.route("https://localhost/**", (r) => {
+    let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
+    const fp = path.join(WEB, f);
+    if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: "" });
+    r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
+  });
+  await p5.goto("https://localhost/");
+  await p5.click("#startBtn");
+  await p5.waitForFunction(() => !document.getElementById("guide").hidden);
+  check(await p5.textContent("#modeBtn") === "▢", "one-coin mode on, guide outline shown");
+  const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  // Guide is centred (CSS ~206, 417). One NGC label inside it, one far outside (image px = CSS x2).
+  const inside = [{ text: "1928 $1", corners: R(240, 500, 330, 528) }, { text: "AU 58", corners: R(240, 540, 300, 568) },
+                  { text: "6449631-004", corners: R(240, 580, 340, 600) }];
+  const outside = [{ text: "1916 D 10C", corners: R(20, 1600, 110, 1625) }, { text: "F 15", corners: R(20, 1635, 60, 1660) },
+                   { text: "1275103-001", corners: R(20, 1670, 120, 1690) }];
+  for (let i = 0; i < 3; i++)
+    await p5.evaluate(([lines]) => window.__l.forEach((cb) => cb({ width: 824, height: 1830, view: { x: 0, y: 0, w: 824, h: 1830 }, barcodes: [], lines })), [[...inside, ...outside]]);
+  await p5.waitForFunction(() => !document.getElementById("single").hidden && /\$/.test(document.getElementById("sPrices").textContent), null, { timeout: 5000 });
+  const title = await p5.textContent("#sTitle"), prices = await p5.textContent("#sPrices");
+  check(/1928/.test(title) && /AU58/.test(title), `result panel: ${title}`);
+  check(/CCE bid/.test(prices), `prices shown: ${prices.replace(/\s+/g, " ")}`);
+  check(!(await p5.evaluate(() => window.__coincropper.coins.has("1275103-001"))), "slab outside the guide ignored");
+  check(await p5.evaluate(() => document.getElementById("guide").classList.contains("found")), "guide turns green when identified");
+  await p5.close();
 }
 
 // 10. Built-in settings (baked into the APK as builtin.local.js).
