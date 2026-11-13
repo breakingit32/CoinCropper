@@ -36,5 +36,20 @@ for (const [description, grade, want, what] of T) {
   const r = matchLabel(INDEX, { description, grade });
   check((r?.pcgs_no ?? null) === want, `${what}: ${r ? `PCGS #${r.pcgs_no} (${r.name})` : "no match"}`);
 }
+// Real PCGS answers: proofs share the business strike's name (later number),
+// and a colour missing from the table is worked out from its siblings.
+const REAL = {
+  "2127": { name: "1877 1C, BN", y: 1877, d: "1C", m: "P", g: "BN", s: "Indian Cents 1859-1909" },
+  "2128": { name: "1877 1C, RB", y: 1877, d: "1C", m: "P", g: "RB", s: "Indian Cents 1859-1909" },
+  "2318": { name: "1877 1C, BN", y: 1877, d: "1C", m: "P", g: "BN", s: "Indian Cents 1859-1909" },
+  "2319": { name: "1877 1C, RB", y: 1877, d: "1C", m: "P", g: "RB", s: "Indian Cents 1859-1909" },
+  "2232": { name: "1908-S 1C, BN", y: 1908, d: "1C", m: "S", g: "BN", s: "Indian Cents 1859-1909" },
+  "2233": { name: "1908-S 1C, RB", y: 1908, d: "1C", m: "S", g: "RB", s: "Indian Cents 1859-1909" },
+};
+check(matchLabel(REAL, { description: "1877 1C", grade: "PF 64 RB" })?.pcgs_no === "2319", "1877 proof RB -> 2319 (later number of the pair)");
+check(matchLabel(REAL, { description: "1877 1C", grade: "MS 62 RB" })?.pcgs_no === "2128", "1877 business RB -> 2128");
+const inf = matchLabel(REAL, { description: "1908 S 1C", grade: "MS 66 RD" });
+check(inf?.pcgs_no === "2234" && inf.inferred, `1908-S RD not listed: worked out as 2234 (${inf?.name})`);
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

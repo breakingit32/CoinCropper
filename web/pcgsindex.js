@@ -13,7 +13,10 @@ export function loadPcgsIndex(fetchImpl = globalThis.fetch) {
 }
 
 const norm = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-const isProof = (e) => /\b(PR|PF|PROOF)\b/.test(norm(e.name)) || /PROOF/.test(norm(e.s));
+// PCGS names often don't say "PR": a proof has the same name as the business
+// strike but a later number in the series (1877 1C BN: 2127 business, 2318
+// proof). Marked when the buckets are built (e.pr).
+const isProof = (e) => e.pr || /\b(PR|PF|PROOF)\b/.test(norm(e.name)) || /PROOF/.test(norm(e.s));
 const DESIG_OF = (e) => {
   const t = norm(`${e.g || ""} ${e.name || ""}`);
   for (const [re, d] of [[/\bDMPL\b/, "DMPL"], [/\bPL\b/, "PL"], [/\bDCAM\b|\bDEEP CAMEO\b/, "DCAM"], [/\bCAM\b|\bCAMEO\b/, "CAM"],
@@ -33,9 +36,39 @@ function bucketsOf(index) {
       const k = `${denomRank(e.d)}|${e.y}`;
       (b.get(k) || b.set(k, []).get(k)).push({ pcgs, ...e });
     }
+    // Same coin listed twice under one series (identical name, mint,
+    // designation, variety): the lower PCGS # is the business strike, the
+    // higher ones proofs.
+    for (const list of b.values()) {
+      const groups = new Map();
+      for (const e of list) {
+        const sig = [norm(e.name).replace(/\b(PR|PF)\b/g, ""), e.m, e.g, e.v, e.s].join("|");
+        (groups.get(sig) || groups.set(sig, []).get(sig)).push(e);
+      }
+      for (const g of groups.values()) {
+        if (g.length < 2) continue;
+        g.sort((p, q) => +p.pcgs - +q.pcgs).forEach((e, i) => { if (i > 0) e.pr = true; });
+      }
+    }
     buckets.set(index, b);
   }
   return b;
+}
+
+// Colour designations run BN, RB, RD on consecutive PCGS numbers. When the
+// wanted colour isn't listed but a sibling is, work out its number.
+const COLORS = ["BN", "RB", "RD"];
+function inferColor(list, w) {
+  if (!COLORS.includes(w.desig)) return null;
+  const want = COLORS.indexOf(w.desig);
+  for (const e of list) {
+    const d = DESIG_OF(e);
+    if (!COLORS.includes(d) || scoreEntry({ ...w, desig: d }, e) < 16) continue;   // same coin otherwise
+    const n = +e.pcgs + (want - COLORS.indexOf(d));
+    const name = String(e.name).replace(/\b(BN|RB|RD)\b/, w.desig);
+    return { pcgs_no: String(n), name: `${name} (worked out from PCGS #${e.pcgs})`, score: 16, inferred: true };
+  }
+  return null;
 }
 
 export function scoreEntry(w, e) {
@@ -69,6 +102,11 @@ export function matchLabel(index, c) {
     if (s < 0) continue;
     if (!best || s > best.score) { if (best) second = best.score; best = { pcgs_no: e.pcgs, name: e.name, score: s }; }
     else if (s > second) second = s;
+  }
+  // Wanted colour (BN/RB/RD) not listed: work it out from a listed sibling.
+  if (w.desig && COLORS.includes(w.desig) && (!best || best.score < 16)) {
+    const inf = inferColor(list, w);
+    if (inf) return inf;
   }
   if (!best) return null;
   best.ambiguous = second === best.score;   // two equally good entries: flag it
