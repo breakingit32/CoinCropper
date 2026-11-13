@@ -382,7 +382,7 @@ const gsr = await page.evaluate(async () => {
   const c = await mk(false).price({ pcgs_no: "7268", grade_num: 64, cac: null });
   return { a, b, c, n, first: calls[0], grey: greyValue(a), greyCac: greyValue(b) };
 });
-check(gsr.first.includes("/GetPricingRequest?PcgsNumber=7268&Grade=64&ApiLevel=advanced") && gsr.first.endsWith(" KT"),
+check(/\/GetPricingRequest\?/.test(gsr.first) && /PcgsNumber=7268/.test(gsr.first) && /Grade=64/.test(gsr.first) && /ApiLevel=advanced/.test(gsr.first) && gsr.first.endsWith(" KT"),
   "Greysheet asked by PCGS # and grade, advanced tier, with key + token");
 check(gsr.grey === 1450 && gsr.a.cpg === 1850 && gsr.a.grey_cac === 1725, `Greysheet MS64: grey ${gsr.grey}, CAC grey ${gsr.a.grey_cac}, CPG ${gsr.a.cpg}`);
 check(gsr.greyCac === 1725 && gsr.n === 1, "CAC coin uses the CAC price; second lookup cached");

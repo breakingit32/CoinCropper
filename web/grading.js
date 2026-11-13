@@ -281,12 +281,13 @@ export function makeGreysheet({ http, getKeys, storage = globalThis.localStorage
   return {
     configured() { const k = getKeys(); return !!(k.gsKey && k.gsToken); },
     // {pcgs_no, grade_num, cac} -> prices for that grade, or null
-    async price({ pcgs_no, gsid, grade_num, cac }) {
-      if (!this.configured() || !(pcgs_no || gsid) || !grade_num) return null;
-      const key = pcgs_no ? `${pcgs_no}:${grade_num}` : `g${gsid}:${grade_num}`;
+    async price({ pcgs_no, gsid, ngc_id, grade_num, cac }) {
+      if (!this.configured() || !(pcgs_no || gsid || ngc_id) || !grade_num) return null;
+      const key = pcgs_no ? `${pcgs_no}:${grade_num}` : gsid ? `g${gsid}:${grade_num}` : `n${ngc_id}:${grade_num}`;
       const hit = get(key);
       if (hit) return hit.v && { ...hit.v, cac: !!cac };
-      const params = pcgs_no ? { PcgsNumber: String(pcgs_no), Grade: String(grade_num) } : { Gsid: String(gsid), Grade: String(grade_num) };
+      const params = { Grade: String(grade_num),
+        ...(pcgs_no ? { PcgsNumber: String(pcgs_no) } : gsid ? { Gsid: String(gsid) } : { NgcId: String(ngc_id) }) };
       let r = await call(params, true);
       let tier = "advanced";
       if (r.denied) { r = await call(params, false); tier = "basic"; }   // no advanced access: retail only

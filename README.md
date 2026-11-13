@@ -181,7 +181,11 @@ from its barcode or the cert number read off the label:
   coins), plus CPG retail. Uses the Advanced tier (`ApiLevel=advanced`) and
   falls back to Basic (retail only) if the key doesn't have it. Cards show
   the CCE bid, else Greysheet, else the PCGS guide.
-* **NGC and other slabs** (no PCGS #): the app finds the coin in the
+* **NGC slabs → PCGS #:** first PCGS's barcode lookup (it accepts NGC
+  barcodes), then the NGC coin ID (from the barcode, or NGC's public cert
+  page) looked up in `web/ngc-pcgs.json`, a table of ~15,000 NGC coin IDs →
+  PCGS numbers bundled in the app.
+* **NGC and other slabs, last resort** (no PCGS #): the app finds the coin in the
   **Greysheet catalog** from its label (year, mint, denomination, variety,
   proof/business strike, designation such as BN/RB/RD, CAM, FB) and uses its
   PCGS # for CCE, Greysheet prices and the PCGS guide. Catalog pages are kept
@@ -210,6 +214,7 @@ node tests/js/scene.test.mjs    # remembered case layout
 node tests/js/slab.test.mjs     # label model on real labels
 node tests/js/catalog.test.mjs  # PCGS # for NGC slabs from the Greysheet catalog
 node tests/js/order.test.mjs    # case order check
+node tests/js/ngc.test.mjs      # NGC coin ID -> PCGS #
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)
