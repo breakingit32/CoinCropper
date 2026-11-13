@@ -478,10 +478,11 @@ function renderTags() {
       const px = sl.cx - Math.sin(sl.angle) * d, py = sl.cy + Math.cos(sl.angle) * d;
       card.classList.add("oncoin");
       // Card scales with the slab so neighbouring cards don't run into each other.
-      const k = Math.max(0.55, Math.min(1, sl.w / 300));
+      // Scales with the slab all the way down; never wider than the slab.
+      const k = Math.max(0.22, Math.min(1.15, sl.w / 260));
       const left = Math.min(Math.max(px, (cw * k) / 2 + 6), overlay.clientWidth - (cw * k) / 2 - 6);
       const top = Math.min(Math.max(py, (chh * k) / 2 + 56), overlay.clientHeight - (chh * k) / 2 - 90);
-      Object.assign(card.style, { left: left + "px", top: top + "px", maxWidth: Math.max(110, sl.w * 0.92 / k) + "px" });
+      Object.assign(card.style, { left: left + "px", top: top + "px", maxWidth: (sl.w * 0.92 / k) + "px", minWidth: "0" });
       card.style.setProperty("--k", k.toFixed(3));
       t.cardRect = { x: left - (cw * k) / 2, y: top - (chh * k) / 2, w: cw * k, h: chh * k };
     } else {
@@ -530,7 +531,8 @@ function noPriceReason(coin) {
   const gs = r.greysheet_status || "";
   if (/Not found in the Greysheet catalog/i.test(notes)) return "Not in Greysheet catalog";
   const cat = /Greysheet catalog[^:]*: ([^·]+)/i.exec(notes);
-  if (cat) return /section not found/i.test(cat[1]) ? "Catalog: layout?" : "Catalog: " + cat[1].trim().slice(0, 30);
+  if (cat) return /section not found/i.test(cat[1]) ? "Catalog: layout?" : /not allowed/i.test(cat[1]) ? "Catalog not allowed for this key"
+    : "Catalog: " + cat[1].trim().slice(0, 30);
   if (/Add your Greysheet/i.test(gs)) return "No Greysheet key";
   if (/refused|denied/i.test(gs)) return "Greysheet key refused";
   if (/no price for grade/i.test(gs)) return "No Greysheet price for grade";

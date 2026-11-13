@@ -115,7 +115,9 @@ export function makeCatalog({ http, getKeys, storage = globalThis.localStorage }
         if (!lv) level = "";                      // remember: this key works without the advanced tier
         return data?.Data || [];
       }
-      lastErr = new Error(`Greysheet catalog ${name.replace(/Request$/, "")}: ${msg || "HTTP " + r.status}${msg && r.status !== 200 ? ` (HTTP ${r.status})` : ""}`);
+      const why = msg || (data?.PermitAccess === false ? "not allowed for this key" : `HTTP ${r.status}`);
+      lastErr = new Error(`Greysheet catalog ${name.replace(/Request$/, "")}: ${why}${msg && r.status !== 200 ? ` (HTTP ${r.status})` : ""}`);
+      lastErr.denied = data?.PermitAccess === false || r.status === 401 || r.status === 403;
     }
     throw lastErr;
   }
@@ -133,10 +135,20 @@ export function makeCatalog({ http, getKeys, storage = globalThis.localStorage }
     }
     return v;
   }
+  // Top of the catalog. If the root node itself is refused, list its
+  // children directly (and then a few low node ids) instead.
   async function root() {
     let v = get("root");
-    if (!v) { const d = await api("GetNodeRequest", { NodeId: "1" }); v = d.map(slimNode); set("root", v); }
-    return v;
+    if (v) return v;
+    let firstErr = null;
+    for (const [name, id] of [["GetNodeRequest", 1], ["GetNodeChildrenRequest", 1], ["GetNodeChildrenRequest", 0]]) {
+      try {
+        const d = await api(name, { NodeId: String(id) });
+        v = d.map(slimNode);
+        if (v.length) { set("root", v); return v; }
+      } catch (e) { firstErr = firstErr || e; }
+    }
+    throw firstErr || new Error("Greysheet catalog: empty");
   }
   const slimItem = (x) => ({ Gsid: x.Gsid, PcgsNumber: x.PcgsNumber, NgcId: x.NgcId, Name: x.Name, CoinDate: x.CoinDate,
     MintMark: x.MintMark, DenominationShort: x.DenominationShort, StrikeType: x.StrikeType, Variety: x.Variety,

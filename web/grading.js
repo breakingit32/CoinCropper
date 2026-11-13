@@ -124,6 +124,21 @@ export function makeGrading({ http, getKeys, storage = globalThis.localStorage }
     return null;
   }
 
+  // NGC slab: PCGS's barcode lookup also takes NGC barcodes (gradingService=NGC).
+  // Gives the PCGS # and PCGS data for the coin; service/cert stay NGC.
+  async function pcgsForNgc(barcode, cert) {
+    if (!barcode || /^https?:/i.test(barcode)) return null;
+    const key = "pcgs:n:" + barcode;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const r = await pcgsCall(`GetCoinFactsByBarcode?barcode=${encodeURIComponent(barcode)}&gradingService=NGC`);
+    if (r.skipped) return null;
+    if (r.error) throw new Error(r.error);
+    const g = r.notFound ? null : { ...slimPcgs(r.data), service: "NGC", cert: cert || null, via: "PCGS barcode lookup" };
+    cache.set(key, g);
+    return g;
+  }
+
   async function cacCall(path) {
     const { cacgKey, cacgToken } = getKeys();
     if (!cacgKey || !cacgToken) return null;
@@ -182,6 +197,7 @@ export function makeGrading({ http, getKeys, storage = globalThis.localStorage }
       try {
         if (coin.service === "PCGS" || (!coin.service && coin.cert)) g = await pcgs({ cert: coin.cert, barcode: coin.raw });
         else if (coin.service === "CACG") g = await cacgCert(coin.cert);
+        else if (coin.service === "NGC") g = await pcgsForNgc(coin.raw, coin.cert);
       } catch (e) { notes.push(`${coin.service || "PCGS"} lookup failed: ${e.message}`); }
       const service = g?.service || coin.service;
       const cert = g?.cert || coin.cert;
