@@ -17,6 +17,15 @@
 import { fixOcrDenom, labelAnchor, normaliseGrade } from "./core.js";
 
 // Slab proportions relative to the label (typical PCGS/NGC holders; tune here).
+// NGC holders, measured on a phone photo of an NGC case (relative to the
+// cert line "1234567-001", whose width is the most reliable thing on the label).
+export const NGC_LAYOUT = {
+  widthPerCert: 3.85,        // holder width / cert line width
+  centreRightOfCert: 0.9,    // modern labels are left-aligned: holder centre is right of the cert line (× cert width)
+  topAboveCert: 0.40,        // holder top above the cert line's centre (× holder width)
+  heightPerWidth: 1.55,      // holder height / width
+};
+
 export const LAYOUT = {
   slabWidthPerLabel: 1.38,   // slab width / width of the label text (calibrated on PCGS holders)
   slabHeightPerWidth: 1.42,  // slab height / slab width
@@ -122,6 +131,19 @@ function canonicalText(id, fields, anchorText) {
   return [line1, line2, anchorText.trim()].filter(Boolean).join("\n");
 }
 
+// Slabs in a case all sit at the same angle: one that came out tilted on its
+// own (short or blurry text line) is turned to match the others.
+export function snapAngles(list) {
+  if (list.length < 2) return;
+  const sorted = list.map((s) => Math.atan2(Math.sin(s.angle), Math.cos(s.angle))).sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  for (const s of list) {
+    let d = s.angle - med; d = Math.atan2(Math.sin(d), Math.cos(d));
+    if (Math.abs(d) > 0.12 && Math.abs(Math.abs(d) - Math.PI) > 0.12) s.angle = med;   // keep upside-down ones
+    else if (Math.abs(Math.abs(d) - Math.PI) <= 0.12) s.angle = med + Math.PI;
+  }
+}
+
 // ------------------------------------------------------------ per frame
 
 /**
@@ -205,7 +227,22 @@ export function readSlabs(lines, barcodes) {
     if (L.u1 - L.u0 < minW) { const mid = (L.u0 + L.u1) / 2; L.u0 = mid - minW / 2; L.u1 = mid + minW / 2; }
     if (!members.length) L.v0 = Math.min(L.v0, -4.5 * H);   // year/grade rows not read yet
 
-    const slab = slabFromLabel(f, L);
+    let slab = slabFromLabel(f, L);
+    if (id.service === "NGC") {
+      // NGC: size the holder from the cert line. Modern labels are left-aligned
+      // (year line starts where the cert line starts); old brown labels are centred.
+      const yearLine = members.find((m) => YEAR_RE.test(m.text));
+      let leftAligned = true;
+      if (yearLine) {
+        const left = Math.min(...yearLine.corners.map((p) => proj(f, p)[0]));
+        leftAligned = Math.abs(left - -W / 2) < 0.35 * W;
+      }
+      const sw = W * NGC_LAYOUT.widthPerCert, sh = sw * NGC_LAYOUT.heightPerWidth;
+      const cu = leftAligned ? NGC_LAYOUT.centreRightOfCert * W : 0;
+      const cv = -NGC_LAYOUT.topAboveCert * sw + sh / 2;
+      const [cx, cy] = unproj(f, cu, cv);
+      slab = { cx, cy, w: sw, h: sh, angle: angleOf(f) };
+    }
     const fields = members.length ? readFields(members, anchor.text, H) : { year: null, denomination: null, grade: null };
     slabs.push({
       cert: id.cert, service: id.service, code: bar?.raw || null, slab, fields,
@@ -214,5 +251,6 @@ export function readSlabs(lines, barcodes) {
       rel: bar ? relativeTo(frameOf(bar.corners), slab) : null,
     });
   }
+  snapAngles(slabs.map((x) => x.slab));
   return { slabs, loose: barcodes.filter((b) => !usedBars.has(b)) };
 }

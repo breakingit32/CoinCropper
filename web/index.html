@@ -178,9 +178,17 @@
         <input name="gsToken" autocapitalize="off" autocorrect="off" spellcheck="false">
         <small>CDN Public API: Greysheet wholesale value for the coin's PCGS # and grade (CAC price for CAC coins).</small>
       </label>
-      <label>NGC dealer API token
+      <label>NGC dealer login (email)
+        <input name="ngcUser" type="email" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </label>
+      <label>NGC dealer password <input name="ngcPass" type="password" autocomplete="current-password"></label>
+      <label>NGC API cert lookup address
+        <input name="ngcCertUrl" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://dealer-api.collectiblesgroup.com/…/{cert}">
+        <small>From NGC's API documentation; {cert} and {grade} are filled in. Gives each NGC slab's coin ID → PCGS #.</small>
+      </label>
+      <label>NGC dealer API token (optional)
         <input name="ngcToken" autocapitalize="off" autocorrect="off" spellcheck="false">
-        <small>Saved for NGC lookups (not used yet).</small>
+        <small>Used if no login is given; tokens last 30 days.</small>
       </label>
       <details>
         <summary>Advanced</summary>

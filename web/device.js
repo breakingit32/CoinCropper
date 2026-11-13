@@ -6,6 +6,7 @@
 import { coinFromGrading, makeGrading, makeGreysheet } from "./grading.js";
 import { makeCatalog } from "./catalog.js";
 import { makeNgc } from "./ngc.js";
+import { makeNgcApi } from "./ngcapi.js";
 import { loadPcgsIndex, matchLabel } from "./pcgsindex.js";
 import {
   buildSearchUrl, emptyCoin, merge, mockBids, normaliseGrade,
@@ -167,7 +168,7 @@ export function makeDeviceBackend(getSettings) {
   const grading = makeGrading({ http, getKeys: () => gradingKeys(getSettings()) });
   const greysheet = makeGreysheet({ http, getKeys: () => gradingKeys(getSettings()) });
   const catalog = makeCatalog({ http, getKeys: () => gradingKeys(getSettings()) });
-  const ngc = makeNgc({ http });
+  const ngc = makeNgc({ http, api: makeNgcApi({ http, getSettings }) });
 
   function cce() {
     const s = getSettings();

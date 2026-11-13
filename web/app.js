@@ -1,7 +1,7 @@
 // CoinCropper — point the phone at slabbed coins, get CCE bids floating over each one.
 
 import { makeDeviceBackend } from "./device.js";
-import { readSlabs, slabFromBarcode } from "./slab.js";
+import { readSlabs, slabFromBarcode, snapAngles } from "./slab.js";
 import { greyValue, parseKeysFile } from "./grading.js";
 import { SceneMap } from "./scene.js";
 import { checkOrder, orderFields } from "./order.js";
@@ -29,7 +29,7 @@ let nativeCam = false;      // Android app: Google ML Kit scanner draws the came
 // Android app: lookups run on the phone (device.js signs in to CCE directly),
 // unless a server address is set in Settings.
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
-const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "serverUrl", "gradeOrder"];
+const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "ngcUser", "ngcPass", "ngcCertUrl", "serverUrl", "gradeOrder"];
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
 }
@@ -395,6 +395,7 @@ export function handleFrame(ev) {
     dets.push({ key, slab: slabFromBarcode(b.corners, rels.get(key)), sure: true, code: b.raw });
   }
 
+  snapAngles(dets.map((d) => d.slab));   // one case, one angle
   const { visible, accepted } = scene.update(dets);
   for (const d of dets) {
     const key = scene.resolve(d.key);
@@ -529,6 +530,8 @@ function noPriceReason(coin) {
   const r = coin.result || {};
   const notes = (r.coin?.notes || []).join(" ");
   const gs = r.greysheet_status || "";
+  const ngcErr = /NGC (token expired|login refused[^·]*|API[^·]*)/i.exec(notes);
+  if (ngcErr && !/from NGC/.test(notes)) return ngcErr[0].slice(0, 34);
   if (/Not found in the Greysheet catalog/i.test(notes)) return "Not in Greysheet catalog";
   const cat = /Greysheet catalog[^:]*: ([^·]+)/i.exec(notes);
   if (cat) return /section not found/i.test(cat[1]) ? "Catalog: layout?" : /not allowed/i.test(cat[1]) ? "Catalog not allowed for this key"

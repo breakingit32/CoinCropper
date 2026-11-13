@@ -39,7 +39,7 @@ export function coinIdFromPage(html) {
   return null;
 }
 
-export function makeNgc({ http, storage = globalThis.localStorage, fetchMap = loadNgcMap }) {
+export function makeNgc({ http, storage = globalThis.localStorage, fetchMap = loadNgcMap, api = null }) {
   const get = (k) => { try { return JSON.parse(storage?.getItem("ngc:" + k) || "null"); } catch { return null; } };
   const set = (k, v) => { try { storage?.setItem("ngc:" + k, JSON.stringify(v)); } catch { /* full */ } };
 
@@ -64,6 +64,15 @@ export function makeNgc({ http, storage = globalThis.localStorage, fetchMap = lo
       const map = await fetchMap();
       if (!map || !Object.keys(map).length) return null;
       let id = coinIdFromBarcode(coin.raw, coin.cert, map), via = "NGC barcode";
+      // NGC dealer API (cert -> coin ID, sometimes PCGS # directly). Its errors
+      // (expired token, refused login) are passed on so the card can say so.
+      if (!id && api?.configured()) {
+        const k = `a:${coin.cert}`;
+        let a = get(k);
+        if (!a) { a = await api.lookup(coin.cert, coin.grade_num); if (a) set(k, a); }
+        if (a?.pcgs_no) return { pcgs_no: a.pcgs_no, ngc_id: a.ngc_id, via: "NGC API" };
+        if (a?.ngc_id) { id = a.ngc_id; via = "NGC API"; }
+      }
       if (!id) { id = await fromPage(coin.cert, coin.grade_num); via = "NGC cert lookup"; }
       if (!id || !map[id]) return null;
       return { pcgs_no: String(map[id]), ngc_id: id, via };

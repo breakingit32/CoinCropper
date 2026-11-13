@@ -1,6 +1,6 @@
 // node tests/js/slab.test.mjs — label model on real labels (positions read off a
 // phone screenshot of a PCGS case; screen px). Locks the slab-size calibration.
-import { readSlabs } from "../../web/slab.js";
+import { readSlabs, snapAngles } from "../../web/slab.js";
 
 let failed = 0;
 const check = (ok, msg) => { console.log((ok ? "ok   " : "FAIL ") + msg); if (!ok) failed++; };
@@ -17,6 +17,16 @@ const CASES = [
     lines: [["PCGS", 620, 692, 670, 702], ["VG08", 620, 722, 670, 738], ["50C", 715, 705, 750, 720],
             ["6052.08/7454263", 595, 757, 705, 770]] },
 ];
+
+// NGC holders from a phone photo of an NGC case (screen px).
+CASES.push(
+  { name: "1835 H10C MS64 (NGC)", real: [255, 690, 520, 1095], fields: { grade: "MS64" },
+    lines: [["1835 H10C", 292, 728, 375, 745], ["MS 64", 292, 757, 338, 775], ["8797789-008", 290, 788, 357, 800]] },
+  { name: "1937-D 3 Legs XF45 (NGC)", real: [550, 252, 820, 680], fields: { grade: "XF45" },
+    lines: [["1937 D 3 LEGS 5C", 592, 298, 718, 318], ["XF 45", 590, 330, 635, 348], ["6849356-007", 590, 362, 657, 374]] },
+  { name: "1821 Small Date (old NGC, centred)", real: [245, 1105, 500, 1500], fields: { grade: "MS61" },
+    lines: [["1821 SMALL DATE 10C", 312, 1150, 470, 1166], ["MS 61", 360, 1180, 392, 1192], ["372226-001", 342, 1197, 405, 1210]] },
+);
 
 for (const c of CASES) {
   const r = readSlabs(c.lines.map(([text, ...b]) => ({ text, corners: R(...b) })), []);
@@ -48,6 +58,12 @@ for (const c of CASES) {
   const [x0, y0, x1, y1] = c.real, cy = 2 * P[1] - (y0 + y1) / 2;   // real slab centre, rotated
   check(s.fields.year === "1807" && s.fields.grade === "AU53" && Math.abs(s.slab.cy - cy) < 0.15 * (y1 - y0) && Math.abs(Math.abs(s.slab.angle) - Math.PI) < 0.05,
     `upside-down label: fields read, slab on the coin side (cy ${Math.round(s.slab.cy)} vs ${Math.round(cy)})`);
+}
+
+{
+  const list = [{ angle: 0.02 }, { angle: 0.01 }, { angle: 0.79 }, { angle: 0.03 }];
+  snapAngles(list);
+  check(Math.abs(list[2].angle - 0.02) < 0.02 && list[0].angle === 0.02, "a slab tilted on its own is turned to match the case");
 }
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");

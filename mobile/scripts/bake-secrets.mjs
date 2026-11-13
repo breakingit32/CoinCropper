@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.join(here, "..", "secrets.local.json");
 const out = path.join(here, "..", "android", "app", "src", "main", "assets", "public", "builtin.local.js");
-const KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken"];
+const KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "ngcUser", "ngcPass", "ngcCertUrl"];
 
 let data = {};
 if (fs.existsSync(src)) {

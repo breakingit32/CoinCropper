@@ -186,6 +186,10 @@ from its barcode or the cert number read off the label:
   built once with `python3 scripts/build_pcgs_index.py KEYS_FILE` (PCGS API;
   resumes, and limits calls per key per run). NGC labels are matched against
   it on the phone with no network.
+* **NGC dealer API:** with the NGC dealer login (or a token) and the cert
+  lookup address from NGC's API documentation in Settings, each NGC cert
+  gives the NGC coin ID (or PCGS #), mapped through `web/ngc-pcgs.json`. The
+  app logs in itself and renews the token.
 * **NGC slabs → PCGS #:** first PCGS's barcode lookup (it accepts NGC
   barcodes), then the NGC coin ID (from the barcode, or NGC's public cert
   page) looked up in `web/ngc-pcgs.json`, a table of ~15,000 NGC coin IDs →
