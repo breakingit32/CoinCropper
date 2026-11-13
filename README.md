@@ -181,6 +181,11 @@ from its barcode or the cert number read off the label:
   coins), plus CPG retail. Uses the Advanced tier (`ApiLevel=advanced`) and
   falls back to Basic (retail only) if the key doesn't have it. Cards show
   the CCE bid, else Greysheet, else the PCGS guide.
+* **Label text → PCGS # (offline):** `web/pcgs-index.json` describes the PCGS
+  numbers in the NGC table (year, mint, denomination, designation, variety),
+  built once with `python3 scripts/build_pcgs_index.py KEYS_FILE` (PCGS API;
+  resumes, and limits calls per key per run). NGC labels are matched against
+  it on the phone with no network.
 * **NGC slabs → PCGS #:** first PCGS's barcode lookup (it accepts NGC
   barcodes), then the NGC coin ID (from the barcode, or NGC's public cert
   page) looked up in `web/ngc-pcgs.json`, a table of ~15,000 NGC coin IDs →
@@ -215,6 +220,7 @@ node tests/js/slab.test.mjs     # label model on real labels
 node tests/js/catalog.test.mjs  # PCGS # for NGC slabs from the Greysheet catalog
 node tests/js/order.test.mjs    # case order check
 node tests/js/ngc.test.mjs      # NGC coin ID -> PCGS #
+node tests/js/pcgsindex.test.mjs # NGC label text -> PCGS # (offline index)
 ```
 
 * `server/labels.py`: barcode / QR / label-text parsing (no network)

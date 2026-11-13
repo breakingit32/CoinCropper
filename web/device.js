@@ -6,6 +6,7 @@
 import { coinFromGrading, makeGrading, makeGreysheet } from "./grading.js";
 import { makeCatalog } from "./catalog.js";
 import { makeNgc } from "./ngc.js";
+import { loadPcgsIndex, matchLabel } from "./pcgsindex.js";
 import {
   buildSearchUrl, emptyCoin, merge, mockBids, normaliseGrade,
   parseBarcode, parseLabelText, parseMarketGrid, parseQuotes, quotesForGrade, summarise,
@@ -207,6 +208,17 @@ export function makeDeviceBackend(getSettings) {
     // No PCGS number (NGC and other slabs): find it in the Greysheet catalog
     // from the label (year, mint, denomination, variety, strike, designation).
     let match = null;
+    // Label text -> PCGS # from the offline index (no network; works for NGC).
+    if (!coin.pcgs_no && coin.year) {
+      try {
+        const idx = await loadPcgsIndex();
+        const m = matchLabel(idx, { year: coin.year, mint_mark: coin.mint_mark, description: detected.description || coin.description, grade: coin.grade });
+        if (m) {
+          coin.pcgs_no = m.pcgs_no;
+          coin.notes.push(`PCGS #${m.pcgs_no} from the label (${m.name}${m.ambiguous ? "; check it, more than one PCGS # fits" : ""})`);
+        }
+      } catch (e) { coin.notes.push(`PCGS index: ${e.message}`); }
+    }
     // NGC: coin ID (barcode or NGC's cert page) -> PCGS # from the NGC->PCGS table.
     if (!coin.pcgs_no && coin.service === "NGC" && coin.cert) {
       try {

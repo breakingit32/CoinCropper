@@ -39,5 +39,16 @@ for (const c of CASES) {
     `packed neighbours keep their own lines (${a.fields.year} ${a.fields.grade} / ${b.fields.year} ${b.fields.grade})`);
 }
 
+// Upside-down label (far side of the case): rotate the 1807 label 180° about a point.
+{
+  const c = CASES[0], P = [500, 1000];
+  const rot = (pts) => pts.map(([x, y]) => [2 * P[0] - x, 2 * P[1] - y]);
+  const r = readSlabs(c.lines.map(([text, ...b]) => ({ text, corners: rot(R(...b)) })), []);
+  const s = r.slabs[0];
+  const [x0, y0, x1, y1] = c.real, cy = 2 * P[1] - (y0 + y1) / 2;   // real slab centre, rotated
+  check(s.fields.year === "1807" && s.fields.grade === "AU53" && Math.abs(s.slab.cy - cy) < 0.15 * (y1 - y0) && Math.abs(Math.abs(s.slab.angle) - Math.PI) < 0.05,
+    `upside-down label: fields read, slab on the coin side (cy ${Math.round(s.slab.cy)} vs ${Math.round(cy)})`);
+}
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

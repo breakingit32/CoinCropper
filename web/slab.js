@@ -135,7 +135,26 @@ export function readSlabs(lines, barcodes) {
   const usedBars = new Set();
   // Each text line / barcode belongs to the nearest cert line it could be part
   // of, so closely packed slabs don't share label lines.
-  const anchors = lines.filter((l) => labelAnchor(l.text)).map((l) => ({ l, f: frameOf(l.corners) }));
+  // Upside-down labels (far side of a case): the label's other lines sit
+  // above the cert line and the barcode below it; pick the way up that finds more.
+  const flip = (f) => ({ ...f, u: [-f.u[0], -f.u[1]], v: [-f.v[0], -f.v[1]] });
+  const fit = (f, self) => {
+    let n = 0;
+    for (const l of lines) {
+      if (l === self || labelAnchor(l.text)) continue;
+      const [cu, cv] = proj(f, centroid(l.corners));
+      if (cv < -0.5 * f.h && cv > -9 * f.h && Math.abs(cu) < 1.5 * f.w) n++;
+    }
+    for (const b of barcodes) {
+      const [cu, cv] = proj(f, centroid(b.corners));
+      if (cv > 0.3 * f.h && cv < 5 * f.h && Math.abs(cu) < 1.2 * f.w) n++;
+    }
+    return n;
+  };
+  const anchors = lines.filter((l) => labelAnchor(l.text)).map((l) => {
+    const f = frameOf(l.corners), g = flip(f);
+    return { l, f: fit(g, l) > fit(f, l) ? g : f };
+  });
   const owner = new Map();
   const claim = (item, inWindow) => {
     let best = null, bestCost = Infinity;
