@@ -29,7 +29,7 @@ let nativeCam = false;      // Android app: Google ML Kit scanner draws the came
 // Android app: lookups run on the phone (device.js signs in to CCE directly),
 // unless a server address is set in Settings.
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
-const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "ngcUser", "ngcPass", "ngcCertUrl", "serverUrl", "gradeOrder"];
+const SETTING_KEYS = ["cceUser", "ccePass", "cceSearchUrl", "pcgsTokens", "cacgKey", "cacgToken", "gsKey", "gsToken", "ngcToken", "ngcUser", "ngcPass", "ngcCertUrl", "serverUrl", "gradeOrder", "sweepSecs"];
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; }
 }
@@ -680,6 +680,7 @@ function applyMode() {
   overlay.hidden = guided && !sweep?.active;
   $("guide").hidden = $("guide").hidden || !!sweep?.active;
   $("sweepBtn").hidden = mode !== "order" || !nativeCam || !!sweep?.active;
+  $("sweepBtn").textContent = `● Sweep ${sweepSecs()} s`;
   singleKey = null; singleCandidate = null;
   orderAt = 0;
 }
@@ -789,12 +790,13 @@ $("restartBtn").onclick = (e) => {
 
 // Sweep: ~10 s pass over the whole case; every slab seen goes into a fresh
 // case map, which is then shown as a diagram with out-of-order slabs marked.
-const SWEEP_MS = 10000;
+// Sweep length from Settings (seconds), 10 by default.
+const sweepSecs = () => { const n = parseInt(setting("sweepSecs"), 10); return n >= 3 && n <= 120 ? n : 10; };
 let sweep = null;   // {scene, start, end, active}
 const activeScene = () => (sweep?.active ? sweep.scene : scene);
 
 function startSweep() {
-  sweep = { scene: new SceneMap(), start: performance.now(), end: performance.now() + SWEEP_MS, active: true };
+  sweep = { scene: new SceneMap(), start: performance.now(), end: performance.now() + sweepSecs() * 1000, active: true };
   for (const t of tracks.values()) t.el?.remove();
   tracks.clear();
   singleKey = null;
@@ -1141,7 +1143,9 @@ function checkServer() {
 function openSettings() {
   const f = $("settingsForm").elements;
   for (const k of SETTING_KEYS) {
-    f[k].value = store(k) || "";
+    // Drop-downs with nothing saved show their default choice.
+    if (f[k].tagName === "SELECT") f[k].value = store(k) || [...f[k].options].find((o) => o.defaultSelected)?.value || f[k].options[0].value;
+    else f[k].value = store(k) || "";
     f[k].dataset.ph ??= f[k].placeholder || "";
     f[k].placeholder = BUILTIN[k] ? "built into this app" : f[k].dataset.ph;
   }
@@ -1163,6 +1167,7 @@ function saveSettings() {
     if (k === "pcgsTokens") { v = v.split(/\s+/).filter(Boolean).join("\n"); f[k].value = v; }
     store(k, v);
   }
+  applyMode();   // e.g. the sweep length shown on its button
   // Prices may change with the new settings: look everything up again.
   for (const code of coins.keys()) lookup(code);
   checkServer();

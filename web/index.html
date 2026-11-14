@@ -196,6 +196,14 @@
       <label>Grade order within the same coin
         <select name="gradeOrder"><option value="desc">High to low</option><option value="asc">Low to high</option></select>
       </label>
+      <label>Sweep length
+        <select name="sweepSecs">
+          <option value="5">5 seconds</option><option value="10" selected>10 seconds</option><option value="15">15 seconds</option>
+          <option value="20">20 seconds</option><option value="30">30 seconds</option><option value="45">45 seconds</option>
+          <option value="60">60 seconds</option>
+        </select>
+        <small>How long "Sweep" records. Longer for big cases; you can always tap Stop early.</small>
+      </label>
       <h3>Grading APIs</h3>
       <p class="muted">Identify each slab from the grading service's own record: coin, grade,
         PCGS #, price guide, population, auction history and CAC sticker.</p>

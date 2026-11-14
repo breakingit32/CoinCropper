@@ -505,8 +505,16 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p6.goto("https://localhost/");
   await p6.click("#startBtn");
   await p6.waitForFunction(() => !document.getElementById("sweepBtn").hidden);
+  check(await p6.textContent("#sweepBtn") === "● Sweep 10 s", "sweep length defaults to 10 s");
+  await p6.evaluate(() => document.getElementById("settingsBtn").click());
+  check(await p6.inputValue("[name=sweepSecs]") === "10", "Settings shows the 10 s default");
+  await p6.selectOption("[name=sweepSecs]", "30");
+  await p6.evaluate(() => document.querySelector("#settingsForm button[type=submit]").click());
+  await p6.evaluate(() => document.querySelector("[data-close=settingsSheet]").click());
+  check(await p6.textContent("#sweepBtn") === "● Sweep 30 s", "sweep length set to 30 s");
   await p6.click("#sweepBtn");
-  check(await p6.isVisible("#sweepBanner"), "sweep started (banner)");
+  await p6.waitForFunction(() => /· \d+ s ·/.test(document.getElementById("sweepText").textContent));
+  check(await p6.isVisible("#sweepBanner") && /· 30 s ·|· 29 s ·/.test(await p6.textContent("#sweepText")), `sweep started with 30 s (${await p6.textContent("#sweepText")})`);
   const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
   const CASE = [[["1834 10C", "MS 63", "8569183-008"], ["1921 10C", "AU 55", "2047300-004"], ["1916 D 10C", "F 15", "1275103-001"]],
                 [["1917 10C", "VF 20", "3905372-012"], ["1924 D 10C", "MS 65", "1111111-001"], ["1926 S 10C", "VF 20", "2222222-002"]]];

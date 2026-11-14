@@ -83,7 +83,8 @@ because browsers won't let one site read another site's pages.)
   CCE bid/ask, Greysheet, CPG retail and PCGS guide (or why a price is
   missing). The outline turns yellow while reading and green when identified;
   tap the panel for the full details.
-* **Sweep (in Order check):** tap **● Sweep 10 s** and move slowly over the
+* **Sweep (in Order check):** tap **● Sweep** (10 s by default; set 5–60 s in
+  Settings → Order check → Sweep length) and move slowly over the
   whole case. Every slab seen goes into one stitched case map, and the result
   is a diagram of the case: each slab in place, numbered in reading order,
   green when in order, red with "→ after ..." when not, plus a list of what
