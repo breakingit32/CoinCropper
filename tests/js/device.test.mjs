@@ -489,13 +489,13 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p4.close();
 }
 
-// 12b. Sweep: pan over a 2x3 case in two overlapping views; stitched map, 1921 out of place.
+// 12b. Live sweep (fallback when the phone can't record video): pan over a 2x3 case in two overlapping views; stitched map, 1921 out of place.
 {
   const p6 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
   p6.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
   await p6.addInitScript(() => { localStorage.setItem("mode", "order"); window.__l = []; window.Capacitor = { isNativePlatform: () => true,
     addListener: (p, e, cb) => { window.__l.push(cb); return {}; },
-    nativePromise: async (p) => (p === "SlabScanner" ? { torch: false } : { status: 404, data: "" }) }; });
+    nativePromise: async (p, m) => { if (m === "recordStart") throw new Error("no video"); return p === "SlabScanner" ? { torch: false } : { status: 404, data: "" }; } }; });
   await p6.route("https://localhost/**", (r) => {
     let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
     const fp = path.join(WEB, f);
@@ -505,16 +505,15 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p6.goto("https://localhost/");
   await p6.click("#startBtn");
   await p6.waitForFunction(() => !document.getElementById("sweepBtn").hidden);
-  check(await p6.textContent("#sweepBtn") === "● Sweep 10 s", "sweep length defaults to 10 s");
+  check(await p6.textContent("#sweepBtn") === "● Video", "video button in order mode");
   await p6.evaluate(() => document.getElementById("settingsBtn").click());
   check(await p6.inputValue("[name=sweepSecs]") === "10", "Settings shows the 10 s default");
   await p6.selectOption("[name=sweepSecs]", "30");
   await p6.evaluate(() => document.querySelector("#settingsForm button[type=submit]").click());
   await p6.evaluate(() => document.querySelector("[data-close=settingsSheet]").click());
-  check(await p6.textContent("#sweepBtn") === "● Sweep 30 s", "sweep length set to 30 s");
   await p6.click("#sweepBtn");
   await p6.waitForFunction(() => /· \d+ s ·/.test(document.getElementById("sweepText").textContent));
-  check(await p6.isVisible("#sweepBanner") && /· 30 s ·|· 29 s ·/.test(await p6.textContent("#sweepText")), `sweep started with 30 s (${await p6.textContent("#sweepText")})`);
+  check(await p6.isVisible("#sweepBanner") && /· 30 s ·|· 29 s ·/.test(await p6.textContent("#sweepText")), `no video: live sweep started with 30 s (${await p6.textContent("#sweepText")})`);
   const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
   const CASE = [[["1834 10C", "MS 63", "8569183-008"], ["1921 10C", "AU 55", "2047300-004"], ["1916 D 10C", "F 15", "1275103-001"]],
                 [["1917 10C", "VF 20", "3905372-012"], ["1924 D 10C", "MS 65", "1111111-001"], ["1926 S 10C", "VF 20", "2222222-002"]]];
@@ -606,6 +605,51 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p7.click("#photoStrip .thumb.prior");
   check(await p7.isVisible("#ghost"), "a photo from last time overlaid on the live view");
   await p7.close();
+}
+
+// 12d. Video: record, stop, sharp frames come back read; stitched; 1921 out of place.
+{
+  const p8 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
+  p8.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
+  const CASE = [[["1834 10C", "MS 63", "8569183-008"], ["1921 10C", "AU 55", "2047300-004"], ["1916 D 10C", "F 15", "1275103-001"]],
+                [["1917 10C", "VF 20", "3905372-012"], ["1924 D 10C", "MS 65", "1111111-001"], ["1926 S 10C", "VF 20", "2222222-002"]]];
+  const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const read = (cols, x0, t) => ({ t, sharp: 120, width: 1080, height: 1920, jpeg: "data:image/gif;base64,R0lGODlhAQABAAAAACw=", barcodes: [],
+    lines: CASE.flatMap((row, r) => cols.flatMap((c) => { const [d, g, cert] = row[c], x = 30 + c * 420 + 55 - x0, y = 300 + r * 630;
+      const L = (tx, a, b, w) => ({ text: tx, block: 0, corners: R(x, y + a, x + w, y + b) });
+      return [L(d, 60, 78, 90), L(g, 88, 110, 60), L(cert, 122, 140, 100)]; })) });
+  await p8.exposeFunction("__native", (m) => {
+    if (m === "recordStop") return { file: "/cache/sweep.mp4", ms: 4000 };
+    if (m === "videoFrames") return { frames: [read([1, 2], 420, 2400), read([0, 1], 0, 400), read([0, 1, 2], 210, 1300)] };
+    if (m === "focus") return { focused: true, locked: true };
+    return { torch: false };
+  });
+  await p8.addInitScript(() => { localStorage.setItem("mode", "order"); window.__calls = []; window.Capacitor = { isNativePlatform: () => true,
+    addListener: () => ({}), nativePromise: async (x, m, o) => { window.__calls.push(m); return x === "SlabScanner" ? await window.__native(m, o) : { status: 404, data: "" }; } }; });
+  await p8.route("https://localhost/**", (r) => {
+    let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
+    const fp = path.join(WEB, f);
+    if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: "" });
+    r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
+  });
+  await p8.goto("https://localhost/");
+  await p8.click("#startBtn");
+  await p8.waitForFunction(() => !document.getElementById("sweepBtn").hidden);
+  await p8.click("#sweepBtn");
+  await p8.waitForFunction(() => /Recording/.test(document.getElementById("sweepText").textContent));
+  check(await p8.evaluate(() => window.__calls.includes("recordStart") && window.__calls.includes("focus")), "recording started, focus locked");
+  check(await p8.isHidden("#sweepBtn"), "video button hidden while recording");
+  await p8.click("#sweepStop");
+  await p8.waitForFunction(() => !document.getElementById("sweepView").hidden, null, { timeout: 20000 });
+  await p8.waitForFunction(() => document.querySelectorAll("#sweepSvg g[data-key]").length === 6 && !document.querySelector("#sweepSvg g.unk"), null, { timeout: 20000 });
+  await p8.waitForTimeout(600);
+  const summary = await p8.textContent("#sweepSummary");
+  const bad = await p8.evaluate(() => [...document.querySelectorAll("#sweepSvg g.bad")].map((g) => g.textContent.replace(/\s+/g, " ").trim()));
+  check(summary.startsWith("1 of 6 slabs out of order") && /from 3 sharp frames/.test(summary) && bad.length === 1 && /#2 1921 10C.*after 1917 10C/.test(bad[0]),
+    `video frames stitched: ${summary} (${bad[0]})`);
+  check(await p8.evaluate(() => window.__calls.indexOf("videoFrames") > window.__calls.indexOf("recordStop")), "frames picked after the video is saved");
+  check(await p8.textContent("#sweepAgain") === "Record again", "Record again offered");
+  await p8.close();
 }
 
 // 13. One-coin mode: slab guide; only the slab inside it is read.

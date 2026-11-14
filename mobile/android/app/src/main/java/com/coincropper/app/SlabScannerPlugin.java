@@ -169,41 +169,7 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                     () -> {
                         try {
                             provider = future.get();
-                            provider.unbindAll();
-                            Preview preview = new Preview.Builder().build();
-                            preview.setSurfaceProvider(previewView.getSurfaceProvider());
-                            ResolutionSelector selector = new ResolutionSelector.Builder()
-                                .setResolutionStrategy(
-                                    new ResolutionStrategy(new Size(1920, 1080), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
-                                )
-                                .build();
-                            ImageAnalysis analysis = new ImageAnalysis.Builder()
-                                .setResolutionSelector(selector)
-                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                                .build();
-                            analysis.setAnalyzer(executor, this);
-                            imageCapture = new ImageCapture.Builder()
-                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                                .build();
-                            try {
-                                camera = provider.bindToLifecycle(
-                                    (LifecycleOwner) getActivity(),
-                                    CameraSelector.DEFAULT_BACK_CAMERA,
-                                    preview,
-                                    analysis,
-                                    imageCapture
-                                );
-                            } catch (Exception e) {
-                                // Some phones can't run all three at once: live scanning still works.
-                                imageCapture = null;
-                                provider.unbindAll();
-                                camera = provider.bindToLifecycle(
-                                    (LifecycleOwner) getActivity(),
-                                    CameraSelector.DEFAULT_BACK_CAMERA,
-                                    preview,
-                                    analysis
-                                );
-                            }
+                            bindDefault();
                             running = true;
                             updateViewRect();
                             JSObject result = new JSObject();
@@ -219,6 +185,344 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                 call.reject("Could not start camera: " + e.getMessage(), e);
             }
         });
+    }
+
+    // Preview + live analysis + photos (the normal set of camera use cases).
+    private void bindDefault() {
+        provider.unbindAll();
+        Preview preview = new Preview.Builder().build();
+        preview.setSurfaceProvider(previewView.getSurfaceProvider());
+        ResolutionSelector selector = new ResolutionSelector.Builder()
+            .setResolutionStrategy(
+                new ResolutionStrategy(new Size(1920, 1080), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+            )
+            .build();
+        ImageAnalysis analysis = new ImageAnalysis.Builder()
+            .setResolutionSelector(selector)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build();
+        analysis.setAnalyzer(executor, this);
+        imageCapture = new ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .build();
+        try {
+            camera = provider.bindToLifecycle(
+                (LifecycleOwner) getActivity(),
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                analysis,
+                imageCapture
+            );
+        } catch (Exception e) {
+            // Some phones can't run all three at once: live scanning still works.
+            imageCapture = null;
+            provider.unbindAll();
+            camera = provider.bindToLifecycle(
+                (LifecycleOwner) getActivity(),
+                CameraSelector.DEFAULT_BACK_CAMERA,
+                preview,
+                analysis
+            );
+        }
+        videoCapture = null;
+    }
+
+    // ---------------------------------------------------------------- video
+
+    private androidx.camera.video.VideoCapture<androidx.camera.video.Recorder> videoCapture;
+    private androidx.camera.video.Recording recording;
+    private java.io.File videoFile;
+    private PluginCall stopCall;
+    private PluginCall startCall;
+
+    /** Start recording a video of the case (preview keeps running; live reading pauses). */
+    @PluginMethod
+    public void recordStart(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (provider == null || previewView == null) {
+                call.reject("Start the camera first");
+                return;
+            }
+            if (recording != null) {
+                call.reject("Already recording");
+                return;
+            }
+            try {
+                provider.unbindAll();
+                Preview preview = new Preview.Builder().build();
+                preview.setSurfaceProvider(previewView.getSurfaceProvider());
+                androidx.camera.video.Recorder recorder = new androidx.camera.video.Recorder.Builder()
+                    .setQualitySelector(androidx.camera.video.QualitySelector.fromOrderedList(
+                        java.util.Arrays.asList(androidx.camera.video.Quality.UHD, androidx.camera.video.Quality.FHD, androidx.camera.video.Quality.HD),
+                        androidx.camera.video.FallbackStrategy.lowerQualityOrHigherThan(androidx.camera.video.Quality.SD)))
+                    .build();
+                videoCapture = androidx.camera.video.VideoCapture.withOutput(recorder);
+                camera = provider.bindToLifecycle((LifecycleOwner) getActivity(), CameraSelector.DEFAULT_BACK_CAMERA, preview, videoCapture);
+                videoFile = new java.io.File(getContext().getCacheDir(), "sweep_" + System.currentTimeMillis() + ".mp4");
+                startCall = call;
+                recording = recorder
+                    .prepareRecording(getContext(), new androidx.camera.video.FileOutputOptions.Builder(videoFile).build())
+                    .start(ContextCompat.getMainExecutor(getContext()), this::onVideoEvent);
+            } catch (Exception e) {
+                recording = null;
+                try { bindDefault(); } catch (Exception ignored) { }
+                call.reject("Couldn't start recording: " + e.getMessage());
+            }
+        });
+    }
+
+    private void onVideoEvent(androidx.camera.video.VideoRecordEvent ev) {
+        if (ev instanceof androidx.camera.video.VideoRecordEvent.Start) {
+            if (startCall != null) {
+                startCall.resolve();
+                startCall = null;
+            }
+        } else if (ev instanceof androidx.camera.video.VideoRecordEvent.Finalize) {
+            androidx.camera.video.VideoRecordEvent.Finalize f = (androidx.camera.video.VideoRecordEvent.Finalize) ev;
+            recording = null;
+            try { bindDefault(); } catch (Exception ignored) { }
+            JSObject res = new JSObject();
+            res.put("file", videoFile.getAbsolutePath());
+            res.put("ms", f.getRecordingStats().getRecordedDurationNanos() / 1000000L);
+            boolean bad = f.hasError() && f.getError() != androidx.camera.video.VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE;
+            if (startCall != null) {
+                startCall.reject("Recording failed (" + f.getError() + ")");
+                startCall = null;
+            }
+            if (stopCall != null) {
+                if (bad && !videoFile.exists()) stopCall.reject("Recording failed (" + f.getError() + ")");
+                else stopCall.resolve(res);
+                stopCall = null;
+            }
+        }
+    }
+
+    /** Stop recording; resolves { file, ms } once the video is saved. */
+    @PluginMethod
+    public void recordStop(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (recording == null) {
+                call.reject("Not recording");
+                return;
+            }
+            stopCall = call;
+            recording.stop();
+        });
+    }
+
+    /**
+     * Pick the sharp frames of a video and read them. The video is decoded twice:
+     * first every frame gets a sharpness score (variance of the Laplacian of the
+     * luma, on a grid), then the sharpest frame of each window (windowMs, 400 by
+     * default) is read with ML Kit, leaving out windows that are blurry next to
+     * the rest (moving too fast). Progress: "videoProgress" {stage, done, total}.
+     * Resolves { frames: [{ t, sharp, width, height, jpeg, barcodes, lines }] }.
+     */
+    @PluginMethod
+    public void videoFrames(PluginCall call) {
+        final String file = call.getString("file");
+        final long windowUs = (long) (call.getInt("windowMs", 400)) * 1000L;
+        if (file == null || barcodeScanner == null || textRecognizer == null) {
+            call.reject(file == null ? "No video" : "Start the camera first");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                java.util.LinkedHashMap<Long, Double> score = new java.util.LinkedHashMap<>();
+                decodeVideo(file, (img, t, rot) -> score.put(t, sharpness(img)), null, "score");
+                if (score.isEmpty()) {
+                    call.reject("The video has no frames");
+                    return;
+                }
+                // Sharpest frame per window, then drop windows far blurrier than the typical one.
+                java.util.TreeMap<Long, long[]> best = new java.util.TreeMap<>();
+                java.util.HashMap<Long, Double> bestScore = new java.util.HashMap<>();
+                for (java.util.Map.Entry<Long, Double> e : score.entrySet()) {
+                    long w = e.getKey() / windowUs;
+                    Double cur = bestScore.get(w);
+                    if (cur == null || e.getValue() > cur) {
+                        bestScore.put(w, e.getValue());
+                        best.put(w, new long[] { e.getKey() });
+                    }
+                }
+                double[] vals = bestScore.values().stream().mapToDouble(Double::doubleValue).sorted().toArray();
+                double median = vals[vals.length / 2];
+                final java.util.HashSet<Long> pick = new java.util.HashSet<>();
+                for (java.util.Map.Entry<Long, long[]> e : best.entrySet()) {
+                    if (bestScore.get(e.getKey()) >= 0.35 * median) pick.add(e.getValue()[0]);
+                }
+                final JSArray frames = new JSArray();
+                final int total = pick.size();
+                decodeVideo(file, (img, t, rot) -> {
+                    if (!pick.contains(t)) return;
+                    Bitmap bmp = rotate(yuvToBitmap(img), rot);
+                    JSObject o = new JSObject();
+                    o.put("t", t / 1000L);
+                    o.put("sharp", Math.round(score.get(t) * 10) / 10.0);
+                    o.put("width", bmp.getWidth());
+                    o.put("height", bmp.getHeight());
+                    o.put("jpeg", smallJpeg(bmp));
+                    readSync(bmp, o);
+                    frames.put(o);
+                    JSObject pr = new JSObject();
+                    pr.put("stage", "read");
+                    pr.put("done", frames.length());
+                    pr.put("total", total);
+                    notifyListeners("videoProgress", pr);
+                }, pick, "read");
+                JSObject res = new JSObject();
+                res.put("frames", frames);
+                res.put("scored", score.size());
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject("Reading the video failed: " + e.getMessage());
+            }
+        }, "video-frames").start();
+    }
+
+    private interface FrameFn {
+        void accept(android.media.Image img, long tUs, int rot) throws Exception;
+    }
+
+    // Decode every frame of the video's first video track into YUV images.
+    private void decodeVideo(String file, FrameFn fn, java.util.Set<Long> only, String stage) throws Exception {
+        android.media.MediaExtractor ex = new android.media.MediaExtractor();
+        ex.setDataSource(file);
+        int track = -1;
+        android.media.MediaFormat fmt = null;
+        for (int i = 0; i < ex.getTrackCount(); i++) {
+            android.media.MediaFormat f = ex.getTrackFormat(i);
+            String mime = f.getString(android.media.MediaFormat.KEY_MIME);
+            if (mime != null && mime.startsWith("video/")) {
+                track = i;
+                fmt = f;
+                break;
+            }
+        }
+        if (track < 0) {
+            ex.release();
+            throw new Exception("no video track");
+        }
+        ex.selectTrack(track);
+        int rot = 0;
+        if (fmt.containsKey("rotation-degrees")) rot = fmt.getInteger("rotation-degrees");
+        else {
+            android.media.MediaMetadataRetriever mr = new android.media.MediaMetadataRetriever();
+            try {
+                mr.setDataSource(file);
+                String r = mr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+                if (r != null) rot = Integer.parseInt(r);
+            } catch (Exception ignored) {
+            } finally {
+                try { mr.release(); } catch (Exception ignored) { }
+            }
+        }
+        long durUs = fmt.containsKey(android.media.MediaFormat.KEY_DURATION) ? fmt.getLong(android.media.MediaFormat.KEY_DURATION) : 0;
+        long lastT = only == null ? -1 : java.util.Collections.max(only);
+        fmt.setInteger(android.media.MediaFormat.KEY_COLOR_FORMAT, android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+        android.media.MediaCodec codec = android.media.MediaCodec.createDecoderByType(fmt.getString(android.media.MediaFormat.KEY_MIME));
+        codec.configure(fmt, null, null, 0);
+        codec.start();
+        android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
+        boolean inDone = false, outDone = false;
+        long lastNote = 0;
+        try {
+            while (!outDone) {
+                if (!inDone) {
+                    int ii = codec.dequeueInputBuffer(10000);
+                    if (ii >= 0) {
+                        java.nio.ByteBuffer buf = codec.getInputBuffer(ii);
+                        int n = ex.readSampleData(buf, 0);
+                        if (n < 0) {
+                            codec.queueInputBuffer(ii, 0, 0, 0, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                            inDone = true;
+                        } else {
+                            codec.queueInputBuffer(ii, 0, n, ex.getSampleTime(), 0);
+                            ex.advance();
+                        }
+                    }
+                }
+                int oi = codec.dequeueOutputBuffer(info, 10000);
+                if (oi >= 0) {
+                    if ((info.flags & android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outDone = true;
+                    if (info.size > 0 && (only == null || only.contains(info.presentationTimeUs))) {
+                        android.media.Image img = codec.getOutputImage(oi);
+                        if (img != null) {
+                            try { fn.accept(img, info.presentationTimeUs, rot); } finally { img.close(); }
+                        }
+                    }
+                    codec.releaseOutputBuffer(oi, false);
+                    if (only == null && durUs > 0 && System.currentTimeMillis() - lastNote > 250) {
+                        lastNote = System.currentTimeMillis();
+                        JSObject pr = new JSObject();
+                        pr.put("stage", stage);
+                        pr.put("done", info.presentationTimeUs / 1000);
+                        pr.put("total", durUs / 1000);
+                        notifyListeners("videoProgress", pr);
+                    }
+                    if (only != null && info.presentationTimeUs >= lastT) outDone = true;
+                }
+            }
+        } finally {
+            codec.stop();
+            codec.release();
+            ex.release();
+        }
+    }
+
+    // Focus measure: variance of the 4-neighbour Laplacian of the luma, sampled every 3rd pixel.
+    private static double sharpness(android.media.Image img) {
+        android.graphics.Rect c = img.getCropRect();
+        android.media.Image.Plane yp = img.getPlanes()[0];
+        java.nio.ByteBuffer y = yp.getBuffer();
+        int rs = yp.getRowStride(), ps = yp.getPixelStride();
+        int x0 = c.left + 2, x1 = c.right - 2, y0 = c.top + 2, y1 = c.bottom - 2, step = Math.max(3, c.width() / 640);
+        double sum = 0, sum2 = 0;
+        long n = 0;
+        for (int yy = y0; yy < y1; yy += step) {
+            int row = yy * rs;
+            for (int xx = x0; xx < x1; xx += step) {
+                int i = row + xx * ps;
+                int v = 4 * (y.get(i) & 255) - (y.get(i - ps) & 255) - (y.get(i + ps) & 255) - (y.get(i - rs) & 255) - (y.get(i + rs) & 255);
+                sum += v;
+                sum2 += (double) v * v;
+                n++;
+            }
+        }
+        if (n == 0) return 0;
+        double m = sum / n;
+        return sum2 / n - m * m;
+    }
+
+    // YUV_420_888 -> NV21 -> JPEG -> Bitmap (full size; done only for the picked frames).
+    private static Bitmap yuvToBitmap(android.media.Image img) {
+        android.graphics.Rect c = img.getCropRect();
+        int w = c.width(), h = c.height();
+        byte[] nv21 = new byte[w * h * 3 / 2];
+        android.media.Image.Plane[] pl = img.getPlanes();
+        java.nio.ByteBuffer yb = pl[0].getBuffer(), ub = pl[1].getBuffer(), vb = pl[2].getBuffer();
+        int yrs = pl[0].getRowStride(), yps = pl[0].getPixelStride();
+        int o = 0;
+        for (int r = 0; r < h; r++) {
+            int base = (r + c.top) * yrs + c.left * yps;
+            if (yps == 1) {
+                yb.position(base);
+                yb.get(nv21, o, w);
+                o += w;
+            } else for (int x = 0; x < w; x++) nv21[o++] = yb.get(base + x * yps);
+        }
+        int urs = pl[1].getRowStride(), ups = pl[1].getPixelStride(), vrs = pl[2].getRowStride(), vps = pl[2].getPixelStride();
+        for (int r = 0; r < h / 2; r++) {
+            for (int x = 0; x < w / 2; x++) {
+                nv21[o++] = vb.get((r + c.top / 2) * vrs + (x + c.left / 2) * vps);
+                nv21[o++] = ub.get((r + c.top / 2) * urs + (x + c.left / 2) * ups);
+            }
+        }
+        android.graphics.YuvImage yuv = new android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, w, h, null);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        yuv.compressToJpeg(new android.graphics.Rect(0, 0, w, h), 92, out);
+        byte[] jpg = out.toByteArray();
+        return android.graphics.BitmapFactory.decodeByteArray(jpg, 0, jpg.length);
     }
 
     /**
@@ -409,6 +713,26 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
         Task<Text> tt = textRecognizer.process(input);
         Tasks.whenAllComplete(bt, tt).addOnCompleteListener(executor, done -> {
             try {
+                fillResults(bt, tt, res);
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject("Reading the photo failed: " + e.getMessage());
+            }
+        });
+    }
+
+    // Same, blocking (call off the main thread).
+    private void readSync(Bitmap photo, JSObject res) throws Exception {
+        InputImage input = InputImage.fromBitmap(photo, 0);
+        Task<List<Barcode>> bt = barcodeScanner.process(input);
+        Task<Text> tt = textRecognizer.process(input);
+        Tasks.await(Tasks.whenAllComplete(bt, tt));
+        fillResults(bt, tt, res);
+    }
+
+    private void fillResults(Task<List<Barcode>> bt, Task<Text> tt, JSObject res) {
+        {
+            {
                 JSArray barcodes = new JSArray();
                 if (bt.isSuccessful()) for (Barcode b : bt.getResult()) {
                     if (b.getRawValue() == null || b.getCornerPoints() == null) continue;
@@ -434,11 +758,8 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                     }
                 }
                 res.put("lines", lines);
-                call.resolve(res);
-            } catch (Exception e) {
-                call.reject("Reading the photo failed: " + e.getMessage());
             }
-        });
+        }
     }
 
     private void updateViewRect() {

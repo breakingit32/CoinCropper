@@ -88,12 +88,13 @@ because browsers won't let one site read another site's pages.)
   is read at full resolution; the photos are stitched by the slabs they share
   into one picture of the case, with every slab outlined and numbered in
   reading order, green in order, red with "→ after ..." when not.
-* **Sweep (in Order check):** tap **● Sweep** (10 s by default; set 5–60 s in
-  Settings → Order check → Sweep length) and move slowly over the
-  whole case. Every slab seen goes into one stitched case map, and the result
-  is a diagram of the case: each slab in place, numbered in reading order,
-  green when in order, red with "→ after ..." when not, plus a list of what
-  to move. (A diagram from the slab positions, not a photo mosaic.)
+* **Video (in Order check):** tap **● Video** and move slowly over the whole
+  case (focus is locked at the start; it stops by itself after the Video
+  length in Settings, 10 s by default, or tap Stop). Afterwards the video is
+  decoded on the phone: every frame gets a sharpness score, the sharpest frame
+  of each 0.4 s is kept (blurred stretches are left out), and those frames are
+  read and stitched like photos into the case map, with out-of-order slabs in
+  red. Phones that can't record fall back to the live sweep.
 * **Order check (⇅), one slab at a time:** with the same outline guide, scan
   each slab in turn from the top left, left to right, row by row; each gets
   its position (#1, #2, ...) and the outline turns green when it's in order

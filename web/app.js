@@ -402,7 +402,7 @@ function detsFrom(lines, bars) {
 }
 
 export function handleFrame(ev) {
-  if (paused || !ev?.width || photoSession) return;
+  if (paused || !ev?.width || photoSession || vrec) return;
   const map = frameMapper(ev);
   const bars = (ev.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: map(b.corners) }));
   const lines = ev.lines ? ev.lines.map((l) => ({ text: l.text, corners: map(l.corners) })) : null;
@@ -686,12 +686,12 @@ function applyMode() {
     ? "Scan each slab in turn: top left first, then left to right" : "Line up a slab in the outline";
   overlay.hidden = guided && !sweep?.active;
   $("guide").hidden = $("guide").hidden || !!sweep?.active;
-  $("sweepBtn").hidden = mode !== "order" || !nativeCam || !!sweep?.active || !!photoSession;
+  $("sweepBtn").hidden = mode !== "order" || !nativeCam || !!sweep?.active || !!photoSession || !!vrec;
   $("photosBtn").hidden = $("sweepBtn").hidden;
   $("photoBar").hidden = !photoSession;
   if (nativeCam || stream) $("controls").hidden = !!photoSession;   // shutter bar replaces them
-  if (photoSession) { $("guide").hidden = true; $("single").hidden = true; overlay.hidden = true; }
-  $("sweepBtn").textContent = `● Sweep ${sweepSecs()} s`;
+  if (photoSession || vrec) { $("guide").hidden = true; $("single").hidden = true; overlay.hidden = true; }
+  $("sweepBtn").textContent = "● Video";
   singleKey = null; singleCandidate = null;
   orderAt = 0;
 }
@@ -774,7 +774,7 @@ function renderOrderPanel(coin, st) {
   $("sPrices").innerHTML = `<div class="${cls} wide"><span>Position</span><b>${esc(msg)}</b></div>`;
   $("sNote").textContent = "";
 }
-$("sweepBtn").onclick = () => startSweep();
+$("sweepBtn").onclick = () => startVideo();
 $("photosBtn").onclick = () => startPhotos();
 $("shutterBtn").onclick = () => takePhoto();
 $("photoCancel").onclick = () => { photoSession = null; $("ghost").hidden = true; unlockFocus(); applyMode(); };
@@ -812,8 +812,8 @@ $("photoStrip").onclick = (e) => {
   const i = th.dataset.i, src = String(i).startsWith("p") ? ps.prior[+i.slice(1)] : ps.photos[+i]?.src;
   setGhost(ps.ghost === src ? null : src);   // tap again to turn the overlay off
 };
-$("sweepStop").onclick = () => finishSweep();
-$("sweepAgain").onclick = () => { const photos = !!sweep?.photos; $("sweepView").hidden = true; sweep = null; photos ? startPhotos() : startSweep(); };
+$("sweepStop").onclick = () => (vrec ? stopVideo() : finishSweep());
+$("sweepAgain").onclick = () => { const kind = sweep?.kind; $("sweepView").hidden = true; sweep = null; kind === "photos" ? startPhotos() : startVideo(); };
 const closeSweep = () => { $("sweepView").hidden = true; sweep = null; orderAt = 0; applyMode(); };
 $("sweepDone").onclick = closeSweep;
 $("sweepClose").onclick = closeSweep;
@@ -867,6 +867,88 @@ function finishSweep() {
 function updateSweepBanner() {
   const left = Math.max(0, Math.ceil((sweep.end - performance.now()) / 1000));
   $("sweepText").textContent = `Sweep slowly over the whole case · ${left} s · ${sweep.scene.size()} slabs`;
+}
+
+// ---------------------------------------------------------------- video (order check)
+
+// Record a video of the case, then pick the frames that are in focus (the
+// sharpest of every short stretch, leaving out blurred ones), read them and
+// stitch them into the case map like photos.
+let vrec = null;   // {state: "starting" | "rec" | "proc", start, end}
+
+async function startVideo() {
+  if (vrec) return;
+  vrec = { state: "starting" };
+  for (const t of tracks.values()) t.el?.remove();
+  tracks.clear();
+  singleKey = null;
+  $("sweepView").hidden = true;
+  $("sweepText").textContent = "Starting the camera…";
+  $("sweepStop").hidden = false;
+  $("sweepBanner").hidden = false;
+  applyMode();
+  try {
+    await window.Capacitor.nativePromise("SlabScanner", "recordStart", {});
+  } catch (e) {
+    // Can't record on this phone: fall back to the live sweep.
+    vrec = null;
+    $("sweepBanner").hidden = true;
+    toast(`Video isn't available (${e.message || e}); sweeping live instead`);
+    startSweep();
+    return;
+  }
+  vrec = { state: "rec", start: performance.now(), end: performance.now() + sweepSecs() * 1000 };
+  focusLocked = false;
+  lockFocus(0.5, 0.45);   // a flat case at one distance: focus once and keep it
+}
+
+async function stopVideo() {
+  if (vrec?.state !== "rec") return;
+  vrec.state = "proc";
+  $("sweepStop").hidden = true;
+  $("sweepText").textContent = "Saving the video…";
+  focusLocked = false;
+  $("focusRing").hidden = true;
+  const cap = window.Capacitor;
+  let frames = [];
+  try {
+    const rec = await cap.nativePromise("SlabScanner", "recordStop", {});
+    const sub = cap.addListener("SlabScanner", "videoProgress", (p) => {
+      $("sweepText").textContent = p.stage === "score"
+        ? `Finding the sharp frames… ${Math.round((100 * p.done) / Math.max(1, p.total))}%`
+        : `Reading frame ${p.done} of ${p.total}…`;
+    });
+    try {
+      frames = (await cap.nativePromise("SlabScanner", "videoFrames", { file: rec.file, windowMs: 400 })).frames || [];
+    } finally {
+      try { (await sub)?.remove?.(); } catch {}
+    }
+  } catch (e) {
+    vrec = null;
+    $("sweepStop").hidden = false;
+    $("sweepBanner").hidden = true;
+    toast(`Video failed: ${e.message || e}`);
+    applyMode();
+    return;
+  }
+  const ps = { scene: new SceneMap({ confirmReads: 1, smooth: 1, holdMs: 0 }), photos: [], t: 0 };
+  ps.scene.onMerge = (from, to, toMain) => {
+    for (const p of ps.photos) if (p.island === from) { p.T = compose(p.T, invert(toMain)); p.island = to; }
+  };
+  for (const f of frames.sort((a, b) => a.t - b.t)) {
+    const p = { src: "", t: f.t, state: "new" };
+    ps.photos.push(p);
+    placeShot(ps, p, f);
+  }
+  vrec = null;
+  $("sweepStop").hidden = false;
+  $("sweepBanner").hidden = true;
+  if (!ps.photos.some((p) => p.state === "read")) {
+    toast(frames.length ? "No labels could be read in the video: move slower and a little closer" : "No sharp frames in the video: move slower");
+    applyMode();
+    return;
+  }
+  finishPhotos(ps, "video");
 }
 
 // ---------------------------------------------------------------- photos (order check)
@@ -1003,6 +1085,22 @@ async function addFromGallery(files) {
   renderStrip();
 }
 
+// One read picture (photo or video frame) into the session's case map.
+function placeShot(ps, p, res) {
+  p.w = res.width; p.h = res.height;
+  if (res.jpeg) p.src = res.jpeg;
+  const lines = (res.lines || []).map((l) => ({ text: l.text, corners: l.corners }));
+  const bars = (res.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: b.corners }));
+  const dets = detsFrom(lines, bars);
+  ps.t += 10000;
+  const { accepted } = ps.scene.update(dets, ps.t);
+  for (const d of dets) { const k = ps.scene.resolve(d.key); if (accepted.has(k)) updateCoin(k, d); }
+  const lf = ps.scene.lastFrame;
+  if (lf && dets.length) { p.T = lf.T; p.island = lf.island; p.state = "read"; return true; }
+  p.state = "none";
+  return false;
+}
+
 // Process: read each photo, add it to the case map, stitch, then show the case.
 async function processPhotos() {
   const ps = photoSession;
@@ -1018,16 +1116,7 @@ async function processPhotos() {
     photoText(`Processing ${n} of ${ps.photos.length}…`);
     try {
       const res = await window.Capacitor.nativePromise("SlabScanner", "read", p.file ? { file: p.file } : { data: p.data });
-      p.w = res.width; p.h = res.height;
-      if (res.jpeg) p.src = res.jpeg;
-      const lines = (res.lines || []).map((l) => ({ text: l.text, corners: l.corners }));
-      const bars = (res.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: b.corners }));
-      const dets = detsFrom(lines, bars);
-      ps.t += 10000;
-      const { accepted } = ps.scene.update(dets, ps.t);
-      for (const d of dets) { const k = ps.scene.resolve(d.key); if (accepted.has(k)) updateCoin(k, d); }
-      const lf = ps.scene.lastFrame;
-      if (lf && dets.length) { p.T = lf.T; p.island = lf.island; p.state = "read"; read++; } else p.state = "none";
+      if (placeShot(ps, p, res)) read++;
     } catch (e) {
       p.state = "failed"; p.error = e.message || String(e);
     }
@@ -1038,23 +1127,23 @@ async function processPhotos() {
   finishPhotos();
 }
 
-function finishPhotos() {
-  const ps = photoSession;
-  photoSession = null;
+function finishPhotos(ps = photoSession, kind = "photos") {
+  if (ps === photoSession) photoSession = null;
   unlockFocus();
   $("ghost").hidden = true;
   const placed = (ps?.photos || []).filter((p) => p.state === "read");
   if (!placed.length) { applyMode(); return; }
-  savePrior(placed.map((p) => p.src));
-  sweep = { scene: ps.scene, active: false, photos: placed };
+  if (kind === "photos") savePrior(placed.map((p) => p.src));
+  sweep = { scene: ps.scene, active: false, photos: placed, kind };
   applyMode();
   orderAt = 0;
   orderState = computeOrder();
   $("sweepView").hidden = false;
-  $("sweepAgain").textContent = "Photos again";
+  $("sweepAgain").textContent = kind === "video" ? "Record again" : "Photos again";
   const skipped = ps.photos.length - placed.length;
   renderSweepMap();
-  if (skipped) $("sweepSummary").textContent += ` · ${skipped} photo${skipped > 1 ? "s" : ""} had no readable labels`;
+  if (kind === "video") $("sweepSummary").textContent += ` · from ${placed.length} sharp frame${placed.length > 1 ? "s" : ""}`;
+  else if (skipped) $("sweepSummary").textContent += ` · ${skipped} photo${skipped > 1 ? "s" : ""} had no readable labels`;
 }
 
 // The case map: slab rectangles at their case positions, numbered in reading order.
@@ -1099,6 +1188,11 @@ function renderSweepMap() {
 }
 
 function frame() {
+  if (vrec?.state === "rec") {
+    const s = Math.floor((performance.now() - vrec.start) / 1000);
+    $("sweepText").textContent = `● Recording ${s} s / ${sweepSecs()} · move slowly over the whole case`;
+    if (performance.now() > vrec.end) stopVideo();
+  }
   if (sweep?.active) {
     updateSweepBanner();
     if (performance.now() > sweep.end) finishSweep();

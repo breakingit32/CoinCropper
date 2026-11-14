@@ -82,7 +82,7 @@
         <span id="orderSummary" hidden>Order check</span>
       </button>
       <button id="torchBtn" class="round" aria-label="Flashlight" hidden>☀</button>
-      <button id="sweepBtn" class="pill-btn sweep" hidden>● Sweep 10 s</button>
+      <button id="sweepBtn" class="pill-btn sweep" hidden>● Video</button>
       <button id="photosBtn" class="pill-btn" hidden>📷 Photos</button>
     </footer>
   </main>
@@ -215,13 +215,13 @@
       <label>Grade order within the same coin
         <select name="gradeOrder"><option value="desc">High to low</option><option value="asc">Low to high</option></select>
       </label>
-      <label>Sweep length
+      <label>Video length
         <select name="sweepSecs">
           <option value="5">5 seconds</option><option value="10" selected>10 seconds</option><option value="15">15 seconds</option>
           <option value="20">20 seconds</option><option value="30">30 seconds</option><option value="45">45 seconds</option>
-          <option value="60">60 seconds</option>
+          <option value="60">60 seconds</option><option value="90">90 seconds</option><option value="120">2 minutes</option>
         </select>
-        <small>How long "Sweep" records. Longer for big cases; you can always tap Stop early.</small>
+        <small>Longest "Video" recording; it stops by itself after this. Longer for big cases; you can always tap Stop early.</small>
       </label>
       <h3>Grading APIs</h3>
       <p class="muted">Identify each slab from the grading service's own record: coin, grade,
