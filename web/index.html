@@ -33,6 +33,10 @@
       </div>
     </section>
     <div id="toast" class="toast" hidden></div>
+    <div id="sweepBanner" class="sweep-banner" hidden>
+      <span id="sweepText">Sweep slowly over the whole case</span>
+      <button type="button" id="sweepStop">Stop</button>
+    </div>
 
     <header id="topbar">
       <div class="brand">CoinCropper</div>
@@ -60,6 +64,7 @@
         <span id="orderSummary" hidden>Order check</span>
       </button>
       <button id="torchBtn" class="round" aria-label="Flashlight" hidden>☀</button>
+      <button id="sweepBtn" class="pill-btn sweep" hidden>● Sweep 10 s</button>
     </footer>
   </main>
 
@@ -147,6 +152,20 @@
     <div class="row">
       <button id="exportBtn">Copy as CSV</button>
       <button id="clearBtn">Clear</button>
+    </div>
+  </section>
+
+  <!-- Sweep result: the case as a diagram, out-of-order slabs marked -->
+  <section id="sweepView" class="sweep-view" hidden>
+    <div class="sheet-head">
+      <div><div class="d-title">Case order</div><div id="sweepSummary" class="d-sub"></div></div>
+      <button class="close" id="sweepClose" aria-label="Close">✕</button>
+    </div>
+    <svg id="sweepSvg" class="sweep-map" preserveAspectRatio="xMidYMid meet"></svg>
+    <ul id="sweepList" class="case-list"></ul>
+    <div class="row">
+      <button type="button" id="sweepAgain" class="primary">Sweep again</button>
+      <button type="button" id="sweepDone">Done</button>
     </div>
   </section>
 

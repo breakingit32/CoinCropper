@@ -313,6 +313,7 @@ function linkBarcode(raw, cert) {
   if (aliases.get(raw) === cert) return;
   aliases.set(raw, cert);
   scene.rename(raw, cert);
+  if (sweep) sweep.scene.rename(raw, cert);
   if (typeof orderSeq !== "undefined" && orderSeq.includes(raw)) {   // order check: same slab, new key
     orderSeq = orderSeq.includes(cert) ? orderSeq.filter((k) => k !== raw) : orderSeq.map((k) => (k === raw ? cert : k));
     saveSeq();
@@ -401,10 +402,11 @@ export function handleFrame(ev) {
   }
 
   snapAngles(dets.map((d) => d.slab));   // one case, one angle
-  if (mode === "single" || mode === "order") { singleFrame(dets); return; }
-  const { visible, accepted } = scene.update(dets);
+  if ((mode === "single" || mode === "order") && !sweep?.active) { singleFrame(dets); return; }
+  const sc = activeScene();
+  const { visible, accepted } = sc.update(dets);
   for (const d of dets) {
-    const key = scene.resolve(d.key);
+    const key = sc.resolve(d.key);
     if (accepted.has(key)) updateCoin(key, d);
   }
   const now = performance.now(), W = innerWidth, H = innerHeight;
@@ -586,18 +588,34 @@ let orderSeq = (() => { try { return JSON.parse(localStorage.getItem("orderSeq")
 const saveSeq = () => { try { localStorage.setItem("orderSeq", JSON.stringify(orderSeq)); } catch { /* ignore */ } };
 
 function computeOrder() {
+  if (mode === "order" && sweep) return computeOrderFrom(sweep.scene, true);
   if (mode === "order") {
     return checkSequence(orderSeq.filter((k) => coins.has(k)), (k) => orderFields(coins.get(k)),
       { gradeDescending: setting("gradeOrder") !== "asc" });
   }
-  const all = [...scene.slabs.values()];
+  return computeOrderFrom(scene, false);
+}
+
+// Order of the slabs in a case map, read row by row from their case positions
+// (straightened by the case's angle). wholeMap: use the biggest linked part
+// of the map (a sweep) instead of the part seen last.
+function computeOrderFrom(sc, wholeMap) {
+  const all = [...sc.slabs.values()];
   if (!all.length) return null;
-  const latest = all.reduce((a, b) => (b.lastSeen > a.lastSeen ? b : a));
-  const isl = all.filter((s) => s.island === latest.island && coins.has(s.key));
+  let island;
+  if (wholeMap) {
+    const n = new Map();
+    for (const s of all) n.set(s.island, (n.get(s.island) || 0) + 1);
+    island = [...n.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  } else island = all.reduce((a, b) => (b.lastSeen > a.lastSeen ? b : a)).island;
+  const isl = all.filter((s) => s.island === island && coins.has(s.key));
   const ang = Math.atan2(isl.reduce((t, s) => t + Math.sin(s.world.angle), 0), isl.reduce((t, s) => t + Math.cos(s.world.angle), 0));
   const c = Math.cos(-ang), sn = Math.sin(-ang);
   const slabs = isl.map((s) => ({ key: s.key, x: s.world.cx * c - s.world.cy * sn, y: s.world.cx * sn + s.world.cy * c, w: s.world.w, h: s.world.h }));
-  return checkOrder(slabs, (k) => orderFields(coins.get(k)), { gradeDescending: setting("gradeOrder") !== "asc" });
+  const res = checkOrder(slabs, (k) => orderFields(coins.get(k)), { gradeDescending: setting("gradeOrder") !== "asc" });
+  res.slabs = slabs;
+  res.unlinked = all.length - isl.length;   // seen, but not tied to the rest of the map
+  return res;
 }
 
 function renderOrderCard(t, coin, t1, t2) {
@@ -606,7 +624,7 @@ function renderOrderCard(t, coin, t1, t2) {
   t.el.classList.toggle("order-ok", st?.ok === true);
   t.el.classList.toggle("order-bad", st?.ok === false);
   t.el.classList.toggle("order-unknown", !st || !st.known);
-  const label = !st || !st.known ? (coin.status === "loading" ? "Reading…" : "Can't read label")
+  const label = !st ? "Reading…" : !st.known ? (coin.status === "loading" ? "Reading…" : "Can't read label")
     : st.ok ? `✓ #${st.pos}` : st.after ? `Move · after ${st.after}` : `Move · first, before ${st.before}`;
   if (t2.dataset.v !== label) { t2.dataset.v = label; t2.textContent = label; }
 }
@@ -617,6 +635,7 @@ function updateOrderSummary() {
   $("modeBtn").classList.toggle("on", mode === "order");
   if (mode !== "order") return;
   const s = orderState;
+  if (sweep?.active) { $("orderSummary").textContent = `Sweeping · ${sweep.scene.size()} slabs`; return; }
   $("orderSummary").textContent = !s || !s.total ? "Order check · scan the top-left slab"
     : s.wrong ? `${s.total} scanned · ${s.wrong} to move` : `${s.total} scanned · all in order ✓`;
 }
@@ -658,7 +677,9 @@ function applyMode() {
   $("sActions").hidden = mode !== "order";
   $("guide").querySelector(".g-hint").textContent = mode === "order"
     ? "Scan each slab in turn: top left first, then left to right" : "Line up a slab in the outline";
-  overlay.hidden = guided;
+  overlay.hidden = guided && !sweep?.active;
+  $("guide").hidden = $("guide").hidden || !!sweep?.active;
+  $("sweepBtn").hidden = mode !== "order" || !nativeCam || !!sweep?.active;
   singleKey = null; singleCandidate = null;
   orderAt = 0;
 }
@@ -741,6 +762,15 @@ function renderOrderPanel(coin, st) {
   $("sPrices").innerHTML = `<div class="${cls} wide"><span>Position</span><b>${esc(msg)}</b></div>`;
   $("sNote").textContent = "";
 }
+$("sweepBtn").onclick = () => startSweep();
+$("sweepStop").onclick = () => finishSweep();
+$("sweepAgain").onclick = () => startSweep();
+const closeSweep = () => { $("sweepView").hidden = true; sweep = null; orderAt = 0; applyMode(); };
+$("sweepDone").onclick = closeSweep;
+$("sweepClose").onclick = closeSweep;
+$("sweepSvg").onclick = (e) => { const g = e.target.closest("g[data-key]"); if (g) openSheet(g.dataset.key); };
+$("sweepList").onclick = (e) => { const li = e.target.closest("li"); if (li) openSheet(li.dataset.code); };
+
 $("undoBtn").onclick = (e) => {
   e.stopPropagation();
   orderSeq.pop(); saveSeq();
@@ -755,7 +785,80 @@ $("restartBtn").onclick = (e) => {
   toast("Start over: scan the top-left slab");
 };
 
+// ---------------------------------------------------------------- sweep (order check)
+
+// Sweep: ~10 s pass over the whole case; every slab seen goes into a fresh
+// case map, which is then shown as a diagram with out-of-order slabs marked.
+const SWEEP_MS = 10000;
+let sweep = null;   // {scene, start, end, active}
+const activeScene = () => (sweep?.active ? sweep.scene : scene);
+
+function startSweep() {
+  sweep = { scene: new SceneMap(), start: performance.now(), end: performance.now() + SWEEP_MS, active: true };
+  for (const t of tracks.values()) t.el?.remove();
+  tracks.clear();
+  singleKey = null;
+  $("sweepView").hidden = true;
+  $("sweepBanner").hidden = false;
+  applyMode();
+}
+function finishSweep() {
+  if (!sweep?.active) return;
+  sweep.active = false;
+  $("sweepBanner").hidden = true;
+  for (const t of tracks.values()) t.el?.remove();
+  tracks.clear();
+  applyMode();
+  orderAt = 0;
+  $("sweepView").hidden = false;
+  renderSweepMap();
+}
+function updateSweepBanner() {
+  const left = Math.max(0, Math.ceil((sweep.end - performance.now()) / 1000));
+  $("sweepText").textContent = `Sweep slowly over the whole case · ${left} s · ${sweep.scene.size()} slabs`;
+}
+
+// The case map: slab rectangles at their case positions, numbered in reading order.
+function renderSweepMap() {
+  const s = orderState;
+  const svg = $("sweepSvg");
+  if (!s?.slabs?.length) {
+    svg.innerHTML = ""; $("sweepSummary").textContent = "No slabs read. Sweep again, a little slower and closer.";
+    $("sweepList").innerHTML = ""; return;
+  }
+  const xs = s.slabs.flatMap((r) => [r.x - r.w / 2, r.x + r.w / 2]), ys = s.slabs.flatMap((r) => [r.y - r.h / 2, r.y + r.h / 2]);
+  const pad = 8, x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - pad, W = Math.max(...xs) + pad - x0, H = Math.max(...ys) + pad - y0;
+  svg.setAttribute("viewBox", `${x0} ${y0} ${W} ${H}`);
+  const parts = [];
+  for (const r of s.slabs) {
+    const it = s.items.get(r.key);
+    const cls = !it?.known ? "unk" : it.ok ? "ok" : "bad";
+    const f = r.w / 9;   // font size relative to the slab
+    const [line1, line2] = String(it?.label || "?").split(" · ");
+    parts.push(`<g class="${cls}" data-key="${esc(r.key)}">
+      <rect x="${r.x - r.w * 0.46}" y="${r.y - r.h * 0.46}" width="${r.w * 0.92}" height="${r.h * 0.92}" rx="${r.w * 0.08}"/>
+      <text x="${r.x}" y="${r.y - r.h * 0.18}" font-size="${f * 1.6}" class="pos">${it ? "#" + it.pos : ""}</text>
+      <text x="${r.x}" y="${r.y + r.h * 0.02}" font-size="${f}">${esc(line1 || "")}</text>
+      <text x="${r.x}" y="${r.y + r.h * 0.02 + f * 1.25}" font-size="${f}">${esc(line2 || "")}</text>
+      ${it?.ok === false ? `<text x="${r.x}" y="${r.y + r.h * 0.3}" font-size="${f * 0.9}" class="mv">→ ${esc(it.after ? "after " + it.after.split(" · ")[0] : "first")}</text>` : ""}
+    </g>`);
+  }
+  svg.innerHTML = parts.join("");
+  $("sweepSummary").textContent = (s.wrong ? `${s.wrong} of ${s.total} slabs out of order` : `All ${s.total - s.unknown} readable slabs in order ✓`)
+    + (s.unknown ? ` · ${s.unknown} couldn't be read` : "") + (s.slabs && s.unlinked ? ` · ${s.unlinked} seen but not linked to the rest` : "");
+  const rows = [...s.items.entries()].filter(([, v]) => v.ok === false).sort((a, b) => a[1].pos - b[1].pos);
+  $("sweepList").innerHTML = rows.map(([k, v]) => `<li data-code="${esc(k)}" class="bad"><span>#${v.pos} ${esc(v.label || "")}</span>
+      <span class="p">${esc(v.after ? "after " + v.after : "first, before " + v.before)}</span></li>`).join("");
+}
+
 function frame() {
+  if (sweep?.active) {
+    updateSweepBanner();
+    if (performance.now() > sweep.end) finishSweep();
+  }
+  if (sweep && !sweep.active && !$("sweepView").hidden && performance.now() - orderAt > 500) {
+    orderAt = performance.now(); orderState = computeOrder(); renderSweepMap();   // fills in as lookups finish
+  }
   if (mode === "order" && performance.now() - orderAt > 250) {
     orderAt = performance.now();
     orderState = computeOrder();

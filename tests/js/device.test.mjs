@@ -489,6 +489,50 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p4.close();
 }
 
+// 12b. Sweep: pan over a 2x3 case in two overlapping views; stitched map, 1921 out of place.
+{
+  const p6 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
+  p6.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
+  await p6.addInitScript(() => { localStorage.setItem("mode", "order"); window.__l = []; window.Capacitor = { isNativePlatform: () => true,
+    addListener: (p, e, cb) => { window.__l.push(cb); return {}; },
+    nativePromise: async (p) => (p === "SlabScanner" ? { torch: false } : { status: 404, data: "" }) }; });
+  await p6.route("https://localhost/**", (r) => {
+    let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
+    const fp = path.join(WEB, f);
+    if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: "" });
+    r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
+  });
+  await p6.goto("https://localhost/");
+  await p6.click("#startBtn");
+  await p6.waitForFunction(() => !document.getElementById("sweepBtn").hidden);
+  await p6.click("#sweepBtn");
+  check(await p6.isVisible("#sweepBanner"), "sweep started (banner)");
+  const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const CASE = [[["1834 10C", "MS 63", "8569183-008"], ["1921 10C", "AU 55", "2047300-004"], ["1916 D 10C", "F 15", "1275103-001"]],
+                [["1917 10C", "VF 20", "3905372-012"], ["1924 D 10C", "MS 65", "1111111-001"], ["1926 S 10C", "VF 20", "2222222-002"]]];
+  const view = (cols, shift) => CASE.flatMap((row, r) => cols.flatMap((c) => {
+    const [d, g, cert] = row[c], x0 = 30 + c * 400 - shift, y0 = 300 + r * 600;
+    return [{ text: d, corners: R(x0, y0, x0 + 90, y0 + 25) }, { text: g, corners: R(x0, y0 + 35, x0 + 60, y0 + 60) },
+            { text: cert, corners: R(x0, y0 + 75, x0 + 100, y0 + 95) }];
+  }));
+  const send = (lines) => p6.evaluate(([lines]) => window.__l.forEach((cb) => cb({ width: 824, height: 1830, view: { x: 0, y: 0, w: 824, h: 1830 }, barcodes: [], lines })), [lines]);
+  for (let i = 0; i < 3; i++) { await send(view([0, 1], 0)); await p6.waitForTimeout(40); }
+  for (let i = 0; i < 4; i++) { await send(view([1, 2], 400)); await p6.waitForTimeout(40); }   // panned one column right
+  await p6.waitForFunction(() => /6 slabs/.test(document.getElementById("sweepText").textContent), null, { timeout: 15000 });
+  await p6.evaluate(() => document.getElementById("sweepStop").click());
+  await p6.waitForFunction(() => !document.getElementById("sweepView").hidden && /out of order|in order/.test(document.getElementById("sweepSummary").textContent), null, { timeout: 20000 });
+  await p6.waitForFunction(() => document.querySelectorAll("#sweepSvg g").length === 6 && !document.querySelector("#sweepSvg g.unk"), null, { timeout: 20000 });
+  const summary = await p6.textContent("#sweepSummary");
+  const bad = await p6.evaluate(() => [...document.querySelectorAll("#sweepSvg g.bad")].map((g) => g.textContent.replace(/\s+/g, " ").trim()));
+  const order = await p6.evaluate(() => [...document.querySelectorAll("#sweepSvg g")].map((g) => g.querySelector(".pos").textContent + " " + g.querySelectorAll("text")[1].textContent));
+  check(summary.startsWith("1 of 6 slabs out of order"), `stitched sweep: ${summary}`);
+  check(bad.length === 1 && /#2 1921 10C/.test(bad[0]) && /after 1917 10C/.test(bad[0]), `out-of-order slab marked: ${bad[0]}`);
+  check(order.includes("#4 1917 10C") && order.includes("#6 1926 S 10C"), `reading order across both views (${order.join(", ")})`);
+  await p6.click("#sweepDone");
+  check(await p6.isHidden("#sweepView"), "case map closed");
+  await p6.close();
+}
+
 // 13. One-coin mode: slab guide; only the slab inside it is read.
 {
   const p5 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });

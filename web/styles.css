@@ -187,3 +187,21 @@ html.native-cam #video { display: none; }
 .single .s-prices .bid b { white-space: normal; }
 .single .s-actions { display: flex; gap: 8px; margin-top: 10px; }
 .single .s-actions button { flex: 1; padding: 8px; font-size: 14px; }
+
+/* Sweep (order check) */
+.pill-btn.sweep { background: #ff6b6bcc; color: #fff; border-color: #ff6b6b; }
+.sweep-banner { position: absolute; left: 12px; right: 12px; top: calc(env(safe-area-inset-top) + 64px); z-index: 4;
+  display: flex; align-items: center; gap: 10px; background: #000c; border: 1px solid #ff6b6b; border-radius: 12px; padding: 8px 12px; }
+.sweep-banner span { flex: 1; font-size: 14px; }
+.sweep-banner span::before { content: "● "; color: #ff6b6b; animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+.sweep-view { position: fixed; inset: 0; z-index: 12; background: var(--panel); overflow: auto;
+  padding: calc(env(safe-area-inset-top) + 12px) 14px calc(env(safe-area-inset-bottom) + 16px); }
+.sweep-map { width: 100%; height: 58vh; background: #0b0d12; border-radius: 12px; margin: 10px 0; }
+.sweep-map g rect { fill: #1d2330; stroke: #3ccf8e; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.sweep-map g.bad rect { fill: #ff6b6b22; stroke: #ff6b6b; stroke-width: 3; }
+.sweep-map g.unk rect { stroke: #9aa3b2; stroke-dasharray: 4 3; }
+.sweep-map text { fill: #f3f5f8; text-anchor: middle; dominant-baseline: middle; font-family: sans-serif; }
+.sweep-map text.pos { font-weight: 700; fill: #3ccf8e; }
+.sweep-map g.bad text.pos, .sweep-map text.mv { fill: #ff6b6b; font-weight: 700; }
+.sweep-map g.unk text.pos { fill: #9aa3b2; }
