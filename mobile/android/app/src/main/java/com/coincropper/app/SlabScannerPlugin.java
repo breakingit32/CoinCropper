@@ -14,6 +14,12 @@ import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ExperimentalGetImage;
 import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.ImageCapture;
+import androidx.camera.core.ImageCaptureException;
+import android.graphics.Bitmap;
+import android.graphics.Matrix;
+import android.util.Base64;
+import java.io.ByteArrayOutputStream;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.core.resolutionselector.ResolutionSelector;
@@ -68,6 +74,7 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
     private Camera camera;
     private BarcodeScanner barcodeScanner;
     private TextRecognizer textRecognizer;
+    private ImageCapture imageCapture;
     private ExecutorService executor;
     private volatile boolean running = false;
     private volatile boolean ocrEnabled = true;
@@ -175,12 +182,28 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                 .build();
                             analysis.setAnalyzer(executor, this);
-                            camera = provider.bindToLifecycle(
-                                (LifecycleOwner) getActivity(),
-                                CameraSelector.DEFAULT_BACK_CAMERA,
-                                preview,
-                                analysis
-                            );
+                            imageCapture = new ImageCapture.Builder()
+                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                                .build();
+                            try {
+                                camera = provider.bindToLifecycle(
+                                    (LifecycleOwner) getActivity(),
+                                    CameraSelector.DEFAULT_BACK_CAMERA,
+                                    preview,
+                                    analysis,
+                                    imageCapture
+                                );
+                            } catch (Exception e) {
+                                // Some phones can't run all three at once: live scanning still works.
+                                imageCapture = null;
+                                provider.unbindAll();
+                                camera = provider.bindToLifecycle(
+                                    (LifecycleOwner) getActivity(),
+                                    CameraSelector.DEFAULT_BACK_CAMERA,
+                                    preview,
+                                    analysis
+                                );
+                            }
                             running = true;
                             updateViewRect();
                             JSObject result = new JSObject();
@@ -194,6 +217,90 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                 );
             } catch (Exception e) {
                 call.reject("Could not start camera: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    /**
+     * Take a full-resolution photo, turn it upright, read it with ML Kit and
+     * return { width, height, barcodes, lines, jpeg } (points in photo pixels,
+     * jpeg = a smaller upright copy, base64, for showing the stitched case).
+     */
+    @PluginMethod
+    public void capture(PluginCall call) {
+        if (imageCapture == null) {
+            call.reject("Photos aren't available on this phone");
+            return;
+        }
+        imageCapture.takePicture(executor, new ImageCapture.OnImageCapturedCallback() {
+            @Override
+            public void onCaptureSuccess(@NonNull ImageProxy image) {
+                Bitmap upright;
+                try {
+                    Bitmap raw = image.toBitmap();
+                    int rot = image.getImageInfo().getRotationDegrees();
+                    if (rot != 0) {
+                        Matrix m = new Matrix();
+                        m.postRotate(rot);
+                        upright = Bitmap.createBitmap(raw, 0, 0, raw.getWidth(), raw.getHeight(), m, true);
+                    } else upright = raw;
+                } catch (Exception e) {
+                    image.close();
+                    call.reject("Photo failed: " + e.getMessage());
+                    return;
+                }
+                image.close();
+                final Bitmap photo = upright;
+                InputImage input = InputImage.fromBitmap(photo, 0);
+                Task<List<Barcode>> bt = barcodeScanner.process(input);
+                Task<Text> tt = textRecognizer.process(input);
+                Tasks.whenAllComplete(bt, tt).addOnCompleteListener(executor, done -> {
+                    try {
+                        JSObject res = new JSObject();
+                        res.put("width", photo.getWidth());
+                        res.put("height", photo.getHeight());
+                        JSArray barcodes = new JSArray();
+                        if (bt.isSuccessful()) for (Barcode b : bt.getResult()) {
+                            if (b.getRawValue() == null || b.getCornerPoints() == null) continue;
+                            JSObject o = new JSObject();
+                            o.put("raw", b.getRawValue());
+                            o.put("corners", corners(b.getCornerPoints()));
+                            barcodes.put(o);
+                        }
+                        res.put("barcodes", barcodes);
+                        JSArray lines = new JSArray();
+                        if (tt.isSuccessful() && tt.getResult() != null) {
+                            int bi = 0;
+                            for (Text.TextBlock block : tt.getResult().getTextBlocks()) {
+                                for (Text.Line line : block.getLines()) {
+                                    if (line.getCornerPoints() == null) continue;
+                                    JSObject o = new JSObject();
+                                    o.put("text", line.getText());
+                                    o.put("block", bi);
+                                    o.put("corners", corners(line.getCornerPoints()));
+                                    lines.put(o);
+                                }
+                                bi++;
+                            }
+                        }
+                        res.put("lines", lines);
+                        // Smaller copy for display (long side 1600 px).
+                        float k = Math.min(1f, 1600f / Math.max(photo.getWidth(), photo.getHeight()));
+                        Bitmap small = k < 1f ? Bitmap.createScaledBitmap(photo, Math.round(photo.getWidth() * k), Math.round(photo.getHeight() * k), true) : photo;
+                        ByteArrayOutputStream out = new ByteArrayOutputStream();
+                        small.compress(Bitmap.CompressFormat.JPEG, 78, out);
+                        res.put("jpeg", "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP));
+                        res.put("jpegScale", k);
+                        call.resolve(res);
+                    } catch (Exception e) {
+                        call.reject("Reading the photo failed: " + e.getMessage());
+                    }
+                });
+            }
+
+            @Override
+            public void onError(@NonNull ImageCaptureException e) {
+                call.reject("Photo failed: " + e.getMessage());
             }
         });
     }

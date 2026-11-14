@@ -148,12 +148,14 @@ export class SceneMap {
       (byIsland.get(s.island) || byIsland.set(s.island, []).get(s.island)).push([s.world, d.slab, d.key]);
     }
     let main = null, mainT = null, mainPairs = [], inlierKeys = new Set(), good = false;
+    this.lastFrame = null;   // {island, T: case -> this frame} (unsmoothed), for photo stitching
     for (const [id, pairs] of byIsland) {
       if (pairs.length > mainPairs.length) { main = id; mainPairs = pairs; }
     }
     if (main != null) {
       const { T, inliers } = robustFit(mainPairs);
       inlierKeys = new Set(inliers.map((p) => p[2]));
+      this.lastFrame = { island: main, T };
       good = inlierKeys.size >= 2;
       const isl = this.islands.get(main);
       if (good) {
@@ -182,9 +184,11 @@ export class SceneMap {
         const members = [...this.slabs.values()].filter((s) => s.island === id);
         let toMain = null;
         if (members.length === 1) {
+          const before = members[0].world;
           members[0].world = poseTo(invMain, pairs[0][1]);
           members[0].island = main;
           this.islands.delete(id);
+          this.onMerge?.(id, main, fit([[before, members[0].world]]));
           continue;
         }
         if (!good || pairs.length < 2) continue;
@@ -193,6 +197,7 @@ export class SceneMap {
         toMain = compose(invMain, T2);   // other world -> main world
         for (const s of members) { s.world = poseTo(toMain, s.world); s.island = main; }
         this.islands.delete(id);
+        this.onMerge?.(id, main, toMain);
       }
       if (good) {
         // 4. Refine remembered positions from what's seen.
@@ -212,6 +217,7 @@ export class SceneMap {
       mainT = identity();
       good = true;
       this.islands.set(main, { T: mainT, at: t, good: true, goodT: mainT, goodAt: t });
+      this.lastFrame = { island: main, T: mainT };
     }
     const inv = main != null && byIsland.has(main) ? invert(robustFit(mainPairs).T) : mainT ? invert(mainT) : null;
     const liveDets = new Map(known.map((d) => [d.key, d]));

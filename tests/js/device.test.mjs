@@ -541,6 +541,47 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p6.close();
 }
 
+// 12c. Photos: two overlapping photos (second panned a column and 10% smaller) stitched; 1921 out of place.
+{
+  const p7 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
+  p7.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
+  const CASE = [[["1834 10C", "MS 63", "8569183-008"], ["1921 10C", "AU 55", "2047300-004"], ["1916 D 10C", "F 15", "1275103-001"]],
+                [["1917 10C", "VF 20", "3905372-012"], ["1924 D 10C", "MS 65", "1111111-001"], ["1926 S 10C", "VF 20", "2222222-002"]]];
+  // Case drawn at 420 px per column / 630 per row; labels near each slab's top left.
+  const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const shot = (cols, x0, scale) => ({ width: Math.round(860 * scale), height: Math.round(1300 * scale), barcodes: [], jpeg: "data:image/gif;base64,R0lGODlhAQABAAAAACw=",
+    lines: CASE.flatMap((row, r) => cols.flatMap((c) => { const [d, g, cert] = row[c], x = 30 + c * 420 + 55 - x0, y = 30 + r * 630;
+      const L = (t, a, b, w) => ({ text: t, block: 0, corners: R(x, y + a, x + w, y + b).map(([px, py]) => [px * scale, py * scale]) });
+      return [L(d, 60, 78, 90), L(g, 88, 110, 60), L(cert, 122, 140, 100)]; })) });
+  const shots = [shot([0, 1], 0, 1), shot([1, 2], 420, 0.9)];
+  await p7.exposeFunction("__shot", (i) => shots[i]);
+  await p7.addInitScript(() => { localStorage.setItem("mode", "order"); window.__n = 0; window.Capacitor = { isNativePlatform: () => true,
+    addListener: () => ({}), nativePromise: async (x, m) => (x === "SlabScanner" && m === "capture" ? await window.__shot(window.__n++) : x === "SlabScanner" ? { torch: false } : { status: 404, data: "" }) }; });
+  await p7.route("https://localhost/**", (r) => {
+    let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
+    const fp = path.join(WEB, f);
+    if (!fs.existsSync(fp)) return r.fulfill({ status: 404, body: "" });
+    r.fulfill({ body: fs.readFileSync(fp), contentType: TYPES[path.extname(fp)] || "application/octet-stream" });
+  });
+  await p7.goto("https://localhost/");
+  await p7.click("#startBtn");
+  await p7.waitForFunction(() => !document.getElementById("photosBtn").hidden);
+  await p7.click("#photosBtn");
+  check(await p7.isVisible("#photoBar") && await p7.isHidden("#controls"), "photo mode: shutter bar shown");
+  await p7.click("#shutterBtn"); await p7.waitForFunction(() => /Photo 1 ·/.test(document.getElementById("photoText").textContent));
+  await p7.click("#shutterBtn"); await p7.waitForFunction(() => /Photo 2 ·/.test(document.getElementById("photoText").textContent));
+  check(/6 in the case/.test(await p7.textContent("#photoText")) && !/not joined/.test(await p7.textContent("#photoText")), `second photo joined: ${await p7.textContent("#photoText")}`);
+  await p7.click("#photoDone");
+  await p7.waitForFunction(() => document.querySelectorAll("#sweepSvg g[data-key]").length === 6 && !document.querySelector("#sweepSvg g.unk"), null, { timeout: 20000 });
+  await p7.waitForTimeout(600);
+  const summary = await p7.textContent("#sweepSummary");
+  const bad = await p7.evaluate(() => [...document.querySelectorAll("#sweepSvg g.bad")].map((g) => g.textContent.replace(/\s+/g, " ").trim()));
+  check(summary.startsWith("1 of 6 slabs out of order") && bad.length === 1 && /#2 1921 10C.*after 1917 10C/.test(bad[0]), `photos stitched: ${summary} (${bad[0]})`);
+  check(await p7.evaluate(() => document.querySelectorAll("#sweepSvg image").length) === 2 && await p7.textContent("#sweepAgain") === "Photos again",
+    "both photos drawn under the map");
+  await p7.close();
+}
+
 // 13. One-coin mode: slab guide; only the slab inside it is read.
 {
   const p5 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });

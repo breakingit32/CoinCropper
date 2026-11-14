@@ -1,5 +1,5 @@
 // App-shell cache; API calls always go to the network.
-const CACHE = "coincropper-v12";
+const CACHE = "coincropper-v13";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "core.js", "device.js", "slab.js", "grading.js", "scene.js", "catalog.js", "order.js", "ngc.js", "ngc-pcgs.json", "pcgsindex.js", "pcgs-index.json", "ngcapi.js", "manifest.json", "icons/icon.svg", "icons/icon-180.png", "icons/icon-192.png", "icons/icon-512.png"];
 self.addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))));
 self.addEventListener("activate", (e) => e.waitUntil(

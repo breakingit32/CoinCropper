@@ -3,7 +3,7 @@
 import { makeDeviceBackend } from "./device.js";
 import { readSlabs, slabFromBarcode, snapAngles } from "./slab.js";
 import { greyValue, parseKeysFile } from "./grading.js";
-import { SceneMap } from "./scene.js";
+import { SceneMap, compose, invert } from "./scene.js";
 import { checkOrder, checkSequence, orderFields } from "./order.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
@@ -381,13 +381,10 @@ function frameMapper(ev) {
 const scene = new SceneMap();
 const rels = new Map();
 
-export function handleFrame(ev) {
-  if (paused || !ev?.width) return;
-  const map = frameMapper(ev);
-  let bars = (ev.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: map(b.corners) }));
+// Text lines + barcodes (already in one coordinate system) -> slab detections.
+function detsFrom(lines, bars) {
   const dets = [];
-  if (ev.lines) {
-    const lines = ev.lines.map((l) => ({ text: l.text, corners: map(l.corners) }));
+  if (lines) {
     const { slabs, loose } = readSlabs(lines, bars);
     for (const sl of slabs) {
       if (sl.code) linkBarcode(sl.code, sl.cert);
@@ -400,8 +397,16 @@ export function handleFrame(ev) {
     const key = aliases.get(b.raw) || b.raw;
     dets.push({ key, slab: slabFromBarcode(b.corners, rels.get(key)), sure: true, code: b.raw });
   }
-
   snapAngles(dets.map((d) => d.slab));   // one case, one angle
+  return dets;
+}
+
+export function handleFrame(ev) {
+  if (paused || !ev?.width || photoSession) return;
+  const map = frameMapper(ev);
+  const bars = (ev.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: map(b.corners) }));
+  const lines = ev.lines ? ev.lines.map((l) => ({ text: l.text, corners: map(l.corners) })) : null;
+  const dets = detsFrom(lines, bars);
   if ((mode === "single" || mode === "order") && !sweep?.active) { singleFrame(dets); return; }
   const sc = activeScene();
   const { visible, accepted } = sc.update(dets);
@@ -614,6 +619,8 @@ function computeOrderFrom(sc, wholeMap) {
   const slabs = isl.map((s) => ({ key: s.key, x: s.world.cx * c - s.world.cy * sn, y: s.world.cx * sn + s.world.cy * c, w: s.world.w, h: s.world.h }));
   const res = checkOrder(slabs, (k) => orderFields(coins.get(k)), { gradeDescending: setting("gradeOrder") !== "asc" });
   res.slabs = slabs;
+  res.angle = ang;
+  res.island = island;
   res.unlinked = all.length - isl.length;   // seen, but not tied to the rest of the map
   return res;
 }
@@ -679,7 +686,11 @@ function applyMode() {
     ? "Scan each slab in turn: top left first, then left to right" : "Line up a slab in the outline";
   overlay.hidden = guided && !sweep?.active;
   $("guide").hidden = $("guide").hidden || !!sweep?.active;
-  $("sweepBtn").hidden = mode !== "order" || !nativeCam || !!sweep?.active;
+  $("sweepBtn").hidden = mode !== "order" || !nativeCam || !!sweep?.active || !!photoSession;
+  $("photosBtn").hidden = $("sweepBtn").hidden;
+  $("photoBar").hidden = !photoSession;
+  if (nativeCam || stream) $("controls").hidden = !!photoSession;   // shutter bar replaces them
+  if (photoSession) { $("guide").hidden = true; $("single").hidden = true; overlay.hidden = true; }
   $("sweepBtn").textContent = `● Sweep ${sweepSecs()} s`;
   singleKey = null; singleCandidate = null;
   orderAt = 0;
@@ -764,8 +775,12 @@ function renderOrderPanel(coin, st) {
   $("sNote").textContent = "";
 }
 $("sweepBtn").onclick = () => startSweep();
+$("photosBtn").onclick = () => startPhotos();
+$("shutterBtn").onclick = () => takePhoto();
+$("photoDone").onclick = () => finishPhotos();
+$("photoCancel").onclick = () => { photoSession = null; applyMode(); };
 $("sweepStop").onclick = () => finishSweep();
-$("sweepAgain").onclick = () => startSweep();
+$("sweepAgain").onclick = () => { const photos = !!sweep?.photos; $("sweepView").hidden = true; sweep = null; photos ? startPhotos() : startSweep(); };
 const closeSweep = () => { $("sweepView").hidden = true; sweep = null; orderAt = 0; applyMode(); };
 $("sweepDone").onclick = closeSweep;
 $("sweepClose").onclick = closeSweep;
@@ -813,11 +828,75 @@ function finishSweep() {
   applyMode();
   orderAt = 0;
   $("sweepView").hidden = false;
+  $("sweepAgain").textContent = "Sweep again";
   renderSweepMap();
 }
 function updateSweepBanner() {
   const left = Math.max(0, Math.ceil((sweep.end - performance.now()) / 1000));
   $("sweepText").textContent = `Sweep slowly over the whole case · ${left} s · ${sweep.scene.size()} slabs`;
+}
+
+// ---------------------------------------------------------------- photos (order check)
+
+// Photos of the case, stitched by the slabs they share. Each photo is read at
+// full resolution; its place in the case is the camera estimate for it
+// (case -> photo), kept up to date when groups of photos are joined.
+let photoSession = null;   // {scene, photos: [{src, w, h, T, island}], t, busy}
+
+function startPhotos() {
+  const sc = new SceneMap({ confirmReads: 1, smooth: 1, holdMs: 0 });
+  photoSession = { scene: sc, photos: [], t: 0, busy: false };
+  sc.onMerge = (from, to, toMain) => {
+    for (const p of photoSession?.photos || []) if (p.island === from) { p.T = compose(p.T, invert(toMain)); p.island = to; }
+  };
+  for (const t of tracks.values()) t.el?.remove();
+  tracks.clear();
+  singleKey = null;
+  $("photoText").textContent = "Photo the case from the top left. Overlap each photo with the last by a row or column.";
+  applyMode();
+}
+
+async function takePhoto() {
+  const ps = photoSession;
+  if (!ps || ps.busy) return;
+  ps.busy = true;
+  $("shutterBtn").classList.add("busy");
+  try {
+    const res = await window.Capacitor.nativePromise("SlabScanner", "capture", {});
+    const lines = (res.lines || []).map((l) => ({ text: l.text, corners: l.corners }));
+    const bars = (res.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: b.corners }));
+    const dets = detsFrom(lines, bars);
+    ps.t += 10000;
+    const { accepted } = ps.scene.update(dets, ps.t);
+    for (const d of dets) { const k = ps.scene.resolve(d.key); if (accepted.has(k)) updateCoin(k, d); }
+    const lf = ps.scene.lastFrame;
+    if (lf && dets.length) {
+      ps.photos.push({ src: res.jpeg, w: res.width, h: res.height, T: lf.T, island: lf.island });
+      const linked = ps.photos.length === 1 || ps.photos.some((p, i) => i < ps.photos.length - 1 && p.island === lf.island);
+      $("photoText").textContent = `Photo ${ps.photos.length} · ${dets.length} slabs read · ${ps.scene.size()} in the case`
+        + (linked ? "" : " · not joined to the earlier photos yet: overlap more");
+    } else {
+      $("photoText").textContent = "No labels read in that photo: move a little closer and try again.";
+    }
+  } catch (e) {
+    $("photoText").textContent = `Photo failed: ${e.message || e}`;
+  } finally {
+    ps.busy = false;
+    $("shutterBtn").classList.remove("busy");
+  }
+}
+
+function finishPhotos() {
+  const ps = photoSession;
+  photoSession = null;
+  if (!ps?.photos.length) { applyMode(); return; }
+  sweep = { scene: ps.scene, active: false, photos: ps.photos };
+  applyMode();
+  orderAt = 0;
+  orderState = computeOrder();
+  $("sweepView").hidden = false;
+  $("sweepAgain").textContent = "Photos again";
+  renderSweepMap();
 }
 
 // The case map: slab rectangles at their case positions, numbered in reading order.
@@ -832,6 +911,14 @@ function renderSweepMap() {
   const pad = 8, x0 = Math.min(...xs) - pad, y0 = Math.min(...ys) - pad, W = Math.max(...xs) + pad - x0, H = Math.max(...ys) + pad - y0;
   svg.setAttribute("viewBox", `${x0} ${y0} ${W} ${H}`);
   const parts = [];
+  const photos = (sweep?.photos || []).filter((p) => p.island === s.island);
+  svg.classList.toggle("photo", photos.length > 0);
+  if (photos.length) {
+    // Each photo placed in the case (photo -> case = inverse of its estimate), then straightened like the slabs.
+    const imgs = photos.map((p) => { const m = invert(p.T);
+      return `<image href="${p.src}" width="${p.w}" height="${p.h}" transform="matrix(${m.a} ${m.b} ${-m.b} ${m.a} ${m.tx} ${m.ty})" preserveAspectRatio="none"/>`; });
+    parts.push(`<g transform="rotate(${(-s.angle * 180) / Math.PI})">${imgs.join("")}</g>`);
+  }
   for (const r of s.slabs) {
     const it = s.items.get(r.key);
     const cls = !it?.known ? "unk" : it.ok ? "ok" : "bad";
