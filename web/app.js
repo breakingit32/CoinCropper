@@ -777,7 +777,14 @@ function renderOrderPanel(coin, st) {
 $("sweepBtn").onclick = () => startSweep();
 $("photosBtn").onclick = () => startPhotos();
 $("shutterBtn").onclick = () => takePhoto();
-$("photoCancel").onclick = () => { photoSession = null; $("ghost").hidden = true; applyMode(); };
+$("photoCancel").onclick = () => { photoSession = null; $("ghost").hidden = true; unlockFocus(); applyMode(); };
+$("focusBtn").onclick = () => (focusLocked ? unlockFocus() : lockFocus());
+// Tap the picture (not the bars) while taking photos: focus there and lock.
+$("stage").addEventListener("click", (e) => {
+  if (!photoSession || e.target.closest("button, input, .photo-bar, .sweep-view, .toast")) return;
+  const r = $("stage").getBoundingClientRect();
+  lockFocus((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+});
 $("photoDone").onclick = () => processPhotos();
 $("galleryBtn").onclick = () => $("galleryInput").click();
 $("galleryInput").onchange = (e) => { addFromGallery([...e.target.files]); e.target.value = ""; };
@@ -785,8 +792,9 @@ $("ghostBtn").onclick = () => {
   const ps = photoSession;
   if (!ps) return;
   if (ps.ghost) return setGhost(null);
-  const src = ps.photos[ps.photos.length - 1]?.src || ps.prior[0];
-  if (src) setGhost(src); else photoText("No photo to overlay yet: take one, or one from last time will show here.");
+  const last = ps.photos.filter((p) => p.src).pop()?.src;
+  const src = last || ps.prior[0];
+  if (src) setGhost(src, !!last); else photoText("No photo to overlay yet: take one, or one from last time will show here.");
 };
 $("ghostOpacity").oninput = () => { $("ghost").style.opacity = String($("ghostOpacity").value / 100); };
 $("photoStrip").onclick = (e) => {
@@ -892,6 +900,7 @@ async function startPhotos() {
   photoText("Photograph the case from the top left, overlapping each photo with the last by a row or column. Then tap Process.");
   applyMode();
   const ps = photoSession;
+  setTimeout(() => { if (photoSession === ps && !focusLocked) lockFocus(0.5, 0.45); }, 400);
   ps.prior = (await loadPrior()) || [];
   renderStrip();
 }
@@ -903,14 +912,15 @@ function renderStrip() {
   if (!ps) return;
   const th = (src, cls, i, removable) => `<div class="thumb ${cls}${ps.ghost === src ? " sel" : ""}" data-i="${i}">
       <img src="${src}" alt="">${removable ? `<button class="x" data-rm="${i}" aria-label="Remove">✕</button>` : ""}</div>`;
-  $("photoStrip").innerHTML = ps.photos.map((p, i) => th(p.src, "", i, true)).join("")
+  $("photoStrip").innerHTML = ps.photos.map((p, i) => p.state === "taking" ? `<div class="thumb taking"></div>` : th(p.src, "", i, true)).join("")
     + (ps.prior.length ? `<span class="prior-label">Last time</span>` + ps.prior.map((src, i) => th(src, "prior", "p" + i, false)).join("") : "");
 }
 
-function setGhost(src) {
+function setGhost(src, follow = false) {
   const ps = photoSession;
   if (!ps) return;
   ps.ghost = src;
+  ps.ghostFollows = !!src && follow;
   const on = !!src;
   $("ghost").hidden = !on;
   if (on) $("ghost").src = src;
@@ -921,23 +931,65 @@ function setGhost(src) {
 }
 
 // Shutter: capture only (fast); reading and stitching happen on Process.
+// Shots don't wait for each other: each gets a placeholder until its picture is back.
 async function takePhoto() {
   const ps = photoSession;
-  if (!ps || ps.capturing) return;
-  ps.capturing = true;
+  if (!ps) return;
+  const p = { file: null, src: "", w: 0, h: 0, state: "taking" };
+  ps.photos.push(p);
+  ps.pending = (ps.pending || 0) + 1;
   $("shutterBtn").classList.add("busy");
+  flashShutter();
+  renderStrip();
   try {
     const res = await window.Capacitor.nativePromise("SlabScanner", "capture", { read: false });
-    ps.photos.push({ file: res.file, src: res.jpeg, w: res.width, h: res.height, state: "new" });
-    photoText(`${ps.photos.length} photo${ps.photos.length > 1 ? "s" : ""} · keep going, then tap Process`);
-    if (ps.ghost) setGhost(res.jpeg);   // overlay follows the newest photo
-    renderStrip();
+    Object.assign(p, { file: res.file, src: res.jpeg, w: res.width, h: res.height, state: "new" });
+    if (ps.ghost !== null && ps.ghostFollows) setGhost(res.jpeg, true);   // overlay follows the newest photo
   } catch (e) {
+    ps.photos.splice(ps.photos.indexOf(p), 1);
     photoText(`Photo failed: ${e.message || e}`);
   } finally {
-    ps.capturing = false;
-    $("shutterBtn").classList.remove("busy");
+    ps.pending--;
+    if (!ps.pending) $("shutterBtn").classList.remove("busy");
+    const n = ps.photos.filter((q) => q.state !== "taking").length;
+    if (photoSession === ps && n) photoText(`${n} photo${n > 1 ? "s" : ""}${focusLocked ? " · focus locked" : ""} · keep going, then tap Process`);
+    renderStrip();
   }
+}
+function flashShutter() {
+  const st = $("stage");
+  st.classList.remove("snap"); void st.offsetWidth; st.classList.add("snap");
+}
+
+// Focus lock: the case is flat and at one distance, so focus once and keep it.
+let focusLocked = false;
+async function lockFocus(x = 0.5, y = 0.5, show = true) {
+  if (!window.Capacitor?.isNativePlatform?.()) return;
+  if (show) {
+    const r = $("focusRing");
+    r.style.left = `${x * 100}%`; r.style.top = `${y * 100}%`;
+    r.className = "focus-ring"; r.hidden = false;
+  }
+  try {
+    const res = await window.Capacitor.nativePromise("SlabScanner", "focus", { x, y, lock: true });
+    focusLocked = true;
+    $("focusRing").className = "focus-ring " + (res.focused ? "ok" : "miss");
+    toast(res.focused ? "Focus locked · tap the picture to refocus" : "Locked, but it may not be sharp · tap a label to refocus");
+  } catch (e) {
+    focusLocked = false;
+    $("focusRing").hidden = true;
+  }
+  $("focusBtn").classList.toggle("on", focusLocked);
+  $("focusBtn").textContent = focusLocked ? "Focus locked" : "Focus lock";
+  clearTimeout(lockFocus.t);
+  lockFocus.t = setTimeout(() => { $("focusRing").hidden = true; }, 1500);
+}
+async function unlockFocus() {
+  focusLocked = false;
+  $("focusBtn").classList.remove("on");
+  $("focusBtn").textContent = "Focus lock";
+  $("focusRing").hidden = true;
+  try { await window.Capacitor?.nativePromise?.("SlabScanner", "focus", { lock: false }); } catch {}
 }
 
 async function addFromGallery(files) {
@@ -958,6 +1010,7 @@ async function processPhotos() {
   if (!ps.photos.length) { photoText("Take some photos first."); return; }
   ps.processing = true;
   $("photoDone").disabled = true;
+  while (ps.pending) { photoText("Saving the last photo…"); await new Promise((r) => setTimeout(r, 100)); }
   let n = 0, read = 0;
   for (const p of ps.photos) {
     n++;
@@ -988,6 +1041,7 @@ async function processPhotos() {
 function finishPhotos() {
   const ps = photoSession;
   photoSession = null;
+  unlockFocus();
   $("ghost").hidden = true;
   const placed = (ps?.photos || []).filter((p) => p.state === "read");
   if (!placed.length) { applyMode(); return; }

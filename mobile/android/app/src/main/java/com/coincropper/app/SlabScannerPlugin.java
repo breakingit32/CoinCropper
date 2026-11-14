@@ -183,7 +183,7 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                                 .build();
                             analysis.setAnalyzer(executor, this);
                             imageCapture = new ImageCapture.Builder()
-                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                                 .build();
                             try {
                                 camera = provider.bindToLifecycle(
@@ -237,16 +237,34 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
         imageCapture.takePicture(executor, new ImageCapture.OnImageCapturedCallback() {
             @Override
             public void onCaptureSuccess(@NonNull ImageProxy image) {
-                Bitmap photo;
+                final int rot = image.getImageInfo().getRotationDegrees();
                 try {
-                    photo = rotate(image.toBitmap(), image.getImageInfo().getRotationDegrees());
-                } catch (Exception e) {
+                    // Fast path: the camera already gives a JPEG. Save those bytes as they
+                    // are (no decode or re-encode); the rotation goes in the file name and
+                    // is applied when the photo is read.
+                    if (!read && image.getFormat() == android.graphics.ImageFormat.JPEG) {
+                        java.nio.ByteBuffer buf = image.getPlanes()[0].getBuffer();
+                        byte[] bytes = new byte[buf.remaining()];
+                        buf.get(bytes);
+                        int w = image.getWidth(), h = image.getHeight();
+                        image.close();
+                        java.io.File f = new java.io.File(getContext().getCacheDir(), "case_" + System.currentTimeMillis() + "_r" + rot + ".jpg");
+                        try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                            out.write(bytes);
+                        }
+                        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                        o.inSampleSize = Math.max(1, Math.max(w, h) / 1200);
+                        Bitmap small = rotate(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length, o), rot);
+                        JSObject res = new JSObject();
+                        res.put("file", f.getAbsolutePath());
+                        res.put("width", rot % 180 == 0 ? w : h);
+                        res.put("height", rot % 180 == 0 ? h : w);
+                        res.put("jpeg", smallJpeg(small));
+                        call.resolve(res);
+                        return;
+                    }
+                    Bitmap photo = rotate(image.toBitmap(), rot);
                     image.close();
-                    call.reject("Photo failed: " + e.getMessage());
-                    return;
-                }
-                image.close();
-                try {
                     java.io.File f = new java.io.File(getContext().getCacheDir(), "case_" + System.currentTimeMillis() + ".jpg");
                     try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
                         photo.compress(Bitmap.CompressFormat.JPEG, 92, out);
@@ -259,7 +277,8 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                     if (read) readBitmap(photo, call, res);
                     else call.resolve(res);
                 } catch (Exception e) {
-                    call.reject("Saving the photo failed: " + e.getMessage());
+                    try { image.close(); } catch (Exception ignored) { }
+                    call.reject("Photo failed: " + e.getMessage());
                 }
             }
 
@@ -267,6 +286,49 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
             public void onError(@NonNull ImageCaptureException e) {
                 call.reject("Photo failed: " + e.getMessage());
             }
+        });
+    }
+
+    /**
+     * Focus at a point of the preview ({x, y} as 0..1 of the view; default the
+     * centre). lock=true (default) keeps focus and exposure there until unlocked
+     * or focus is called again; lock=false lets the camera return to autofocus.
+     * Resolves { focused } once the lens has settled.
+     */
+    @PluginMethod
+    public void focus(PluginCall call) {
+        final boolean lock = call.getBoolean("lock", true);
+        final float x = call.getFloat("x", 0.5f), y = call.getFloat("y", 0.5f);
+        getActivity().runOnUiThread(() -> {
+            if (camera == null || previewView == null) {
+                call.reject("Camera not started");
+                return;
+            }
+            if (!lock) {
+                camera.getCameraControl().cancelFocusAndMetering();
+                JSObject res = new JSObject();
+                res.put("focused", false);
+                res.put("locked", false);
+                call.resolve(res);
+                return;
+            }
+            androidx.camera.core.MeteringPoint pt = previewView.getMeteringPointFactory()
+                .createPoint(x * previewView.getWidth(), y * previewView.getHeight());
+            androidx.camera.core.FocusMeteringAction action = new androidx.camera.core.FocusMeteringAction.Builder(pt,
+                    androidx.camera.core.FocusMeteringAction.FLAG_AF | androidx.camera.core.FocusMeteringAction.FLAG_AE)
+                .disableAutoCancel()
+                .build();
+            ListenableFuture<androidx.camera.core.FocusMeteringResult> f = camera.getCameraControl().startFocusAndMetering(action);
+            f.addListener(() -> {
+                JSObject res = new JSObject();
+                try {
+                    res.put("focused", f.get().isFocusSuccessful());
+                } catch (Exception e) {
+                    res.put("focused", false);
+                }
+                res.put("locked", true);
+                call.resolve(res);
+            }, ContextCompat.getMainExecutor(getContext()));
         });
     }
 
@@ -288,6 +350,8 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
                 int rot = 0;
                 if (file != null) {
                     bmp = android.graphics.BitmapFactory.decodeFile(file);
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("_r(\\d+)\\.jpg$").matcher(file);
+                    if (m.find()) rot = Integer.parseInt(m.group(1));
                 } else if (data != null) {
                     byte[] bytes = Base64.decode(data.replaceFirst("^data:[^,]*,", ""), Base64.DEFAULT);
                     bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);

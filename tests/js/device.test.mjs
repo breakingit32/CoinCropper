@@ -558,10 +558,12 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p7.exposeFunction("__native", (m, o) => {
     if (m === "capture") return { file: o.n === 0 ? "/cache/a.jpg" : "/cache/b.jpg", width: 860, height: 1300, jpeg: GIF };
     if (m === "read") return o.file ? READS[o.file] : { ...read([2], 840, 1), jpeg: GIF };
+    if (m === "focus") return { focused: true, locked: o.lock !== false };
     return { torch: false };
   });
   await p7.addInitScript(() => { localStorage.setItem("mode", "order"); window.__n = 0; window.__calls = []; window.Capacitor = { isNativePlatform: () => true,
-    addListener: () => ({}), nativePromise: async (x, m, o) => { window.__calls.push(m + (o?.read === false ? ":capture-only" : "")); return x === "SlabScanner" ? await window.__native(m, { ...o, n: m === "capture" ? window.__n++ : 0 }) : { status: 404, data: "" }; } }; });
+    addListener: () => ({}), nativePromise: async (x, m, o) => { window.__calls.push(m + (o?.read === false ? ":capture-only" : "") + (m === "focus" ? (o.lock === false ? ":unlock" : ":lock") : ""));
+      if (m === "capture") await new Promise((r) => setTimeout(r, 400)); return x === "SlabScanner" ? await window.__native(m, { ...o, n: m === "capture" ? window.__n++ : 0 }) : { status: 404, data: "" }; } }; });
   await p7.route("https://localhost/**", (r) => {
     let f = new URL(r.request().url()).pathname; if (f === "/") f = "/index.html";
     const fp = path.join(WEB, f);
@@ -573,16 +575,24 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p7.waitForFunction(() => !document.getElementById("photosBtn").hidden);
   await p7.click("#photosBtn");
   check(await p7.isVisible("#photoBar") && await p7.isHidden("#controls"), "photo mode: shutter bar shown");
-  await p7.click("#shutterBtn"); await p7.waitForFunction(() => document.querySelectorAll("#photoStrip .thumb").length === 1);
+  await p7.waitForFunction(() => window.__calls.includes("focus:lock"));
+  check(await p7.textContent("#focusBtn") === "Focus locked", "focus locked when photo mode starts");
+  await p7.mouse.click(200, 300);
+  await p7.waitForFunction(() => window.__calls.filter((c) => c === "focus:lock").length === 2);
+  check(true, "tap on the picture refocuses and locks there");
+  await p7.click("#shutterBtn"); await p7.waitForFunction(() => document.querySelectorAll("#photoStrip .thumb:not(.taking)").length === 1);
   await p7.click("#ghostBtn");
   check(await p7.isVisible("#ghost") && await p7.isVisible("#ghostOpacity"), "overlay of the last photo on the live view");
-  await p7.click("#shutterBtn"); await p7.waitForFunction(() => document.querySelectorAll("#photoStrip .thumb").length === 2);
+  await p7.click("#shutterBtn");
+  check(await p7.evaluate(() => document.querySelectorAll("#photoStrip .thumb.taking").length === 1), "shutter doesn't wait for the picture (placeholder at once)");
+  await p7.waitForFunction(() => document.querySelectorAll("#photoStrip .thumb:not(.taking)").length === 2);
   check(await p7.evaluate(() => window.__calls.filter((c) => c === "capture:capture-only").length === 2 && !window.__calls.includes("read")),
     "shutter only captures; nothing read yet");
   await p7.setInputFiles("#galleryInput", { name: "case.gif", mimeType: "image/gif", buffer: Buffer.from("R0lGODlhAQABAAAAACw=", "base64") });
   await p7.waitForFunction(() => document.querySelectorAll("#photoStrip .thumb").length === 3);
   await p7.click("#photoDone");
   await p7.waitForFunction(() => !document.getElementById("sweepView").hidden, null, { timeout: 20000 });
+  check(await p7.evaluate(() => window.__calls.includes("focus:unlock")), "focus unlocked after processing");
   await p7.waitForFunction(() => document.querySelectorAll("#sweepSvg g[data-key]").length === 6 && !document.querySelector("#sweepSvg g.unk"), null, { timeout: 20000 });
   await p7.waitForTimeout(600);
   const summary = await p7.textContent("#sweepSummary");

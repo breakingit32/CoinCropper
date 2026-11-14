@@ -234,3 +234,10 @@ html.native-cam #video { display: none; }
 .photo-tools button.on { background: var(--gold); color: #1a1405; }
 .photo-tools input[type=range] { flex: 1; min-width: 60px; accent-color: var(--gold); }
 #photoDone:disabled { opacity: .6; }
+.thumb.taking { background: #ffffff22; animation: blink .8s infinite; }
+.focus-ring { position: absolute; z-index: 3; width: 70px; height: 70px; margin: -35px 0 0 -35px; border: 2px solid #fff; border-radius: 10px;
+  pointer-events: none; transition: border-color .2s, transform .2s; transform: scale(1.25); }
+.focus-ring.ok { border-color: var(--gold); transform: scale(1); }
+.focus-ring.miss { border-color: #e66; transform: scale(1); }
+#stage.snap::after { content: ""; position: absolute; inset: 0; background: #fff; z-index: 4; pointer-events: none; animation: snap .18s ease-out forwards; }
+@keyframes snap { from { opacity: .55; } to { opacity: 0; } }

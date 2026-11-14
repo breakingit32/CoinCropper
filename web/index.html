@@ -34,10 +34,12 @@
     </section>
     <div id="toast" class="toast" hidden></div>
     <img id="ghost" class="ghost" alt="" hidden>
+    <div id="focusRing" class="focus-ring" hidden></div>
     <div id="photoBar" class="photo-bar" hidden>
       <div id="photoText" class="photo-text">Photograph the case from the top left, overlapping each photo with the last by a row or column. Then tap Process.</div>
       <div id="photoStrip" class="photo-strip"></div>
       <div class="photo-tools">
+        <button type="button" id="focusBtn">Focus lock</button>
         <button type="button" id="ghostBtn">Overlay</button>
         <input type="range" id="ghostOpacity" min="10" max="90" value="45" aria-label="Overlay opacity" hidden>
         <button type="button" id="galleryBtn">From gallery</button>
