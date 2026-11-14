@@ -777,8 +777,33 @@ function renderOrderPanel(coin, st) {
 $("sweepBtn").onclick = () => startSweep();
 $("photosBtn").onclick = () => startPhotos();
 $("shutterBtn").onclick = () => takePhoto();
-$("photoDone").onclick = () => finishPhotos();
-$("photoCancel").onclick = () => { photoSession = null; applyMode(); };
+$("photoCancel").onclick = () => { photoSession = null; $("ghost").hidden = true; applyMode(); };
+$("photoDone").onclick = () => processPhotos();
+$("galleryBtn").onclick = () => $("galleryInput").click();
+$("galleryInput").onchange = (e) => { addFromGallery([...e.target.files]); e.target.value = ""; };
+$("ghostBtn").onclick = () => {
+  const ps = photoSession;
+  if (!ps) return;
+  if (ps.ghost) return setGhost(null);
+  const src = ps.photos[ps.photos.length - 1]?.src || ps.prior[0];
+  if (src) setGhost(src); else photoText("No photo to overlay yet: take one, or one from last time will show here.");
+};
+$("ghostOpacity").oninput = () => { $("ghost").style.opacity = String($("ghostOpacity").value / 100); };
+$("photoStrip").onclick = (e) => {
+  const ps = photoSession;
+  if (!ps) return;
+  const rm = e.target.closest("[data-rm]");
+  if (rm) {
+    const [p] = ps.photos.splice(+rm.dataset.rm, 1);
+    if (p && ps.ghost === p.src) setGhost(null);
+    photoText(`${ps.photos.length} photos`);
+    return renderStrip();
+  }
+  const th = e.target.closest(".thumb");
+  if (!th) return;
+  const i = th.dataset.i, src = String(i).startsWith("p") ? ps.prior[+i.slice(1)] : ps.photos[+i]?.src;
+  setGhost(ps.ghost === src ? null : src);   // tap again to turn the overlay off
+};
 $("sweepStop").onclick = () => finishSweep();
 $("sweepAgain").onclick = () => { const photos = !!sweep?.photos; $("sweepView").hidden = true; sweep = null; photos ? startPhotos() : startSweep(); };
 const closeSweep = () => { $("sweepView").hidden = true; sweep = null; orderAt = 0; applyMode(); };
@@ -841,62 +866,141 @@ function updateSweepBanner() {
 // Photos of the case, stitched by the slabs they share. Each photo is read at
 // full resolution; its place in the case is the camera estimate for it
 // (case -> photo), kept up to date when groups of photos are joined.
-let photoSession = null;   // {scene, photos: [{src, w, h, T, island}], t, busy}
+let photoSession = null;   // {scene, photos: [...], prior: [src], t, ghost}
 
-function startPhotos() {
+// Photos of the last processed session, kept on the phone for overlaying next time.
+const idb = (fn) => new Promise((res) => {
+  try {
+    const req = indexedDB.open("coincropper", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("kv");
+    req.onsuccess = () => { try { fn(req.result.transaction("kv", "readwrite").objectStore("kv"), res); } catch { res(null); } };
+    req.onerror = () => res(null);
+  } catch { res(null); }
+});
+const loadPrior = () => idb((st, res) => { const g = st.get("lastPhotos"); g.onsuccess = () => res(g.result || []); g.onerror = () => res([]); });
+const savePrior = (srcs) => idb((st, res) => { const p = st.put(srcs, "lastPhotos"); p.onsuccess = () => res(true); p.onerror = () => res(false); });
+
+async function startPhotos() {
   const sc = new SceneMap({ confirmReads: 1, smooth: 1, holdMs: 0 });
-  photoSession = { scene: sc, photos: [], t: 0, busy: false };
+  photoSession = { scene: sc, photos: [], prior: [], t: 0, ghost: null };
   sc.onMerge = (from, to, toMain) => {
     for (const p of photoSession?.photos || []) if (p.island === from) { p.T = compose(p.T, invert(toMain)); p.island = to; }
   };
   for (const t of tracks.values()) t.el?.remove();
   tracks.clear();
   singleKey = null;
-  $("photoText").textContent = "Photo the case from the top left. Overlap each photo with the last by a row or column.";
+  photoText("Photograph the case from the top left, overlapping each photo with the last by a row or column. Then tap Process.");
   applyMode();
+  const ps = photoSession;
+  ps.prior = (await loadPrior()) || [];
+  renderStrip();
+}
+const photoText = (t) => { $("photoText").textContent = t; };
+
+// Thumbnails: this session's photos (✕ removes), then last session's (for overlay only).
+function renderStrip() {
+  const ps = photoSession;
+  if (!ps) return;
+  const th = (src, cls, i, removable) => `<div class="thumb ${cls}${ps.ghost === src ? " sel" : ""}" data-i="${i}">
+      <img src="${src}" alt="">${removable ? `<button class="x" data-rm="${i}" aria-label="Remove">✕</button>` : ""}</div>`;
+  $("photoStrip").innerHTML = ps.photos.map((p, i) => th(p.src, "", i, true)).join("")
+    + (ps.prior.length ? `<span class="prior-label">Last time</span>` + ps.prior.map((src, i) => th(src, "prior", "p" + i, false)).join("") : "");
 }
 
+function setGhost(src) {
+  const ps = photoSession;
+  if (!ps) return;
+  ps.ghost = src;
+  const on = !!src;
+  $("ghost").hidden = !on;
+  if (on) $("ghost").src = src;
+  $("ghost").style.opacity = String($("ghostOpacity").value / 100);
+  $("ghostOpacity").hidden = !on;
+  $("ghostBtn").classList.toggle("on", on);
+  renderStrip();
+}
+
+// Shutter: capture only (fast); reading and stitching happen on Process.
 async function takePhoto() {
   const ps = photoSession;
-  if (!ps || ps.busy) return;
-  ps.busy = true;
+  if (!ps || ps.capturing) return;
+  ps.capturing = true;
   $("shutterBtn").classList.add("busy");
   try {
-    const res = await window.Capacitor.nativePromise("SlabScanner", "capture", {});
-    const lines = (res.lines || []).map((l) => ({ text: l.text, corners: l.corners }));
-    const bars = (res.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: b.corners }));
-    const dets = detsFrom(lines, bars);
-    ps.t += 10000;
-    const { accepted } = ps.scene.update(dets, ps.t);
-    for (const d of dets) { const k = ps.scene.resolve(d.key); if (accepted.has(k)) updateCoin(k, d); }
-    const lf = ps.scene.lastFrame;
-    if (lf && dets.length) {
-      ps.photos.push({ src: res.jpeg, w: res.width, h: res.height, T: lf.T, island: lf.island });
-      const linked = ps.photos.length === 1 || ps.photos.some((p, i) => i < ps.photos.length - 1 && p.island === lf.island);
-      $("photoText").textContent = `Photo ${ps.photos.length} · ${dets.length} slabs read · ${ps.scene.size()} in the case`
-        + (linked ? "" : " · not joined to the earlier photos yet: overlap more");
-    } else {
-      $("photoText").textContent = "No labels read in that photo: move a little closer and try again.";
-    }
+    const res = await window.Capacitor.nativePromise("SlabScanner", "capture", { read: false });
+    ps.photos.push({ file: res.file, src: res.jpeg, w: res.width, h: res.height, state: "new" });
+    photoText(`${ps.photos.length} photo${ps.photos.length > 1 ? "s" : ""} · keep going, then tap Process`);
+    if (ps.ghost) setGhost(res.jpeg);   // overlay follows the newest photo
+    renderStrip();
   } catch (e) {
-    $("photoText").textContent = `Photo failed: ${e.message || e}`;
+    photoText(`Photo failed: ${e.message || e}`);
   } finally {
-    ps.busy = false;
+    ps.capturing = false;
     $("shutterBtn").classList.remove("busy");
   }
+}
+
+async function addFromGallery(files) {
+  const ps = photoSession;
+  if (!ps) return;
+  for (const f of files) {
+    const src = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => res(null); r.readAsDataURL(f); });
+    if (src) ps.photos.push({ data: src, src, w: 0, h: 0, state: "new" });
+  }
+  photoText(`${ps.photos.length} photos · tap Process when you have them all`);
+  renderStrip();
+}
+
+// Process: read each photo, add it to the case map, stitch, then show the case.
+async function processPhotos() {
+  const ps = photoSession;
+  if (!ps || ps.processing) return;
+  if (!ps.photos.length) { photoText("Take some photos first."); return; }
+  ps.processing = true;
+  $("photoDone").disabled = true;
+  let n = 0, read = 0;
+  for (const p of ps.photos) {
+    n++;
+    if (p.state !== "new") continue;
+    photoText(`Processing ${n} of ${ps.photos.length}…`);
+    try {
+      const res = await window.Capacitor.nativePromise("SlabScanner", "read", p.file ? { file: p.file } : { data: p.data });
+      p.w = res.width; p.h = res.height;
+      if (res.jpeg) p.src = res.jpeg;
+      const lines = (res.lines || []).map((l) => ({ text: l.text, corners: l.corners }));
+      const bars = (res.barcodes || []).map((b) => ({ raw: String(b.raw).trim(), corners: b.corners }));
+      const dets = detsFrom(lines, bars);
+      ps.t += 10000;
+      const { accepted } = ps.scene.update(dets, ps.t);
+      for (const d of dets) { const k = ps.scene.resolve(d.key); if (accepted.has(k)) updateCoin(k, d); }
+      const lf = ps.scene.lastFrame;
+      if (lf && dets.length) { p.T = lf.T; p.island = lf.island; p.state = "read"; read++; } else p.state = "none";
+    } catch (e) {
+      p.state = "failed"; p.error = e.message || String(e);
+    }
+  }
+  ps.processing = false;
+  $("photoDone").disabled = false;
+  if (!read) { photoText("No labels could be read in these photos: move a little closer and try again."); return; }
+  finishPhotos();
 }
 
 function finishPhotos() {
   const ps = photoSession;
   photoSession = null;
-  if (!ps?.photos.length) { applyMode(); return; }
-  sweep = { scene: ps.scene, active: false, photos: ps.photos };
+  $("ghost").hidden = true;
+  const placed = (ps?.photos || []).filter((p) => p.state === "read");
+  if (!placed.length) { applyMode(); return; }
+  savePrior(placed.map((p) => p.src));
+  sweep = { scene: ps.scene, active: false, photos: placed };
   applyMode();
   orderAt = 0;
   orderState = computeOrder();
   $("sweepView").hidden = false;
   $("sweepAgain").textContent = "Photos again";
+  const skipped = ps.photos.length - placed.length;
   renderSweepMap();
+  if (skipped) $("sweepSummary").textContent += ` · ${skipped} photo${skipped > 1 ? "s" : ""} had no readable labels`;
 }
 
 // The case map: slab rectangles at their case positions, numbered in reading order.

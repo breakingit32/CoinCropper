@@ -222,9 +222,10 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
     }
 
     /**
-     * Take a full-resolution photo, turn it upright, read it with ML Kit and
-     * return { width, height, barcodes, lines, jpeg } (points in photo pixels,
-     * jpeg = a smaller upright copy, base64, for showing the stitched case).
+     * Take a full-resolution photo and turn it upright. With read=false (default
+     * true) it is only saved, for reading later with read({file}); returns
+     * { file, width, height, jpeg } (jpeg = a smaller copy for display).
+     * With read=true it is also read: + { barcodes, lines } in photo pixels.
      */
     @PluginMethod
     public void capture(PluginCall call) {
@@ -232,75 +233,146 @@ public class SlabScannerPlugin extends Plugin implements ImageAnalysis.Analyzer 
             call.reject("Photos aren't available on this phone");
             return;
         }
+        final boolean read = call.getBoolean("read", true);
         imageCapture.takePicture(executor, new ImageCapture.OnImageCapturedCallback() {
             @Override
             public void onCaptureSuccess(@NonNull ImageProxy image) {
-                Bitmap upright;
+                Bitmap photo;
                 try {
-                    Bitmap raw = image.toBitmap();
-                    int rot = image.getImageInfo().getRotationDegrees();
-                    if (rot != 0) {
-                        Matrix m = new Matrix();
-                        m.postRotate(rot);
-                        upright = Bitmap.createBitmap(raw, 0, 0, raw.getWidth(), raw.getHeight(), m, true);
-                    } else upright = raw;
+                    photo = rotate(image.toBitmap(), image.getImageInfo().getRotationDegrees());
                 } catch (Exception e) {
                     image.close();
                     call.reject("Photo failed: " + e.getMessage());
                     return;
                 }
                 image.close();
-                final Bitmap photo = upright;
-                InputImage input = InputImage.fromBitmap(photo, 0);
-                Task<List<Barcode>> bt = barcodeScanner.process(input);
-                Task<Text> tt = textRecognizer.process(input);
-                Tasks.whenAllComplete(bt, tt).addOnCompleteListener(executor, done -> {
-                    try {
-                        JSObject res = new JSObject();
-                        res.put("width", photo.getWidth());
-                        res.put("height", photo.getHeight());
-                        JSArray barcodes = new JSArray();
-                        if (bt.isSuccessful()) for (Barcode b : bt.getResult()) {
-                            if (b.getRawValue() == null || b.getCornerPoints() == null) continue;
-                            JSObject o = new JSObject();
-                            o.put("raw", b.getRawValue());
-                            o.put("corners", corners(b.getCornerPoints()));
-                            barcodes.put(o);
-                        }
-                        res.put("barcodes", barcodes);
-                        JSArray lines = new JSArray();
-                        if (tt.isSuccessful() && tt.getResult() != null) {
-                            int bi = 0;
-                            for (Text.TextBlock block : tt.getResult().getTextBlocks()) {
-                                for (Text.Line line : block.getLines()) {
-                                    if (line.getCornerPoints() == null) continue;
-                                    JSObject o = new JSObject();
-                                    o.put("text", line.getText());
-                                    o.put("block", bi);
-                                    o.put("corners", corners(line.getCornerPoints()));
-                                    lines.put(o);
-                                }
-                                bi++;
-                            }
-                        }
-                        res.put("lines", lines);
-                        // Smaller copy for display (long side 1600 px).
-                        float k = Math.min(1f, 1600f / Math.max(photo.getWidth(), photo.getHeight()));
-                        Bitmap small = k < 1f ? Bitmap.createScaledBitmap(photo, Math.round(photo.getWidth() * k), Math.round(photo.getHeight() * k), true) : photo;
-                        ByteArrayOutputStream out = new ByteArrayOutputStream();
-                        small.compress(Bitmap.CompressFormat.JPEG, 78, out);
-                        res.put("jpeg", "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP));
-                        res.put("jpegScale", k);
-                        call.resolve(res);
-                    } catch (Exception e) {
-                        call.reject("Reading the photo failed: " + e.getMessage());
+                try {
+                    java.io.File f = new java.io.File(getContext().getCacheDir(), "case_" + System.currentTimeMillis() + ".jpg");
+                    try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                        photo.compress(Bitmap.CompressFormat.JPEG, 92, out);
                     }
-                });
+                    JSObject res = new JSObject();
+                    res.put("file", f.getAbsolutePath());
+                    res.put("width", photo.getWidth());
+                    res.put("height", photo.getHeight());
+                    res.put("jpeg", smallJpeg(photo));
+                    if (read) readBitmap(photo, call, res);
+                    else call.resolve(res);
+                } catch (Exception e) {
+                    call.reject("Saving the photo failed: " + e.getMessage());
+                }
             }
 
             @Override
             public void onError(@NonNull ImageCaptureException e) {
                 call.reject("Photo failed: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * Read a saved photo ({file}) or a picture from the gallery ({data}: data URL
+     * or base64). Returns { width, height, barcodes, lines } (+ jpeg for {data}).
+     */
+    @PluginMethod
+    public void read(PluginCall call) {
+        if (barcodeScanner == null || textRecognizer == null) {
+            call.reject("Start the camera first");
+            return;
+        }
+        String file = call.getString("file");
+        String data = call.getString("data");
+        executor.execute(() -> {
+            try {
+                Bitmap bmp;
+                int rot = 0;
+                if (file != null) {
+                    bmp = android.graphics.BitmapFactory.decodeFile(file);
+                } else if (data != null) {
+                    byte[] bytes = Base64.decode(data.replaceFirst("^data:[^,]*,", ""), Base64.DEFAULT);
+                    bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                    try {
+                        android.media.ExifInterface exif = new android.media.ExifInterface(new java.io.ByteArrayInputStream(bytes));
+                        int o = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL);
+                        rot = o == android.media.ExifInterface.ORIENTATION_ROTATE_90 ? 90
+                            : o == android.media.ExifInterface.ORIENTATION_ROTATE_180 ? 180
+                            : o == android.media.ExifInterface.ORIENTATION_ROTATE_270 ? 270 : 0;
+                    } catch (Exception ignored) {
+                        rot = 0;
+                    }
+                } else {
+                    call.reject("Nothing to read");
+                    return;
+                }
+                if (bmp == null) {
+                    call.reject("Couldn't open that picture");
+                    return;
+                }
+                // Very large gallery pictures: keep reading fast and memory safe.
+                float k = Math.min(1f, 4000f / Math.max(bmp.getWidth(), bmp.getHeight()));
+                if (k < 1f) bmp = Bitmap.createScaledBitmap(bmp, Math.round(bmp.getWidth() * k), Math.round(bmp.getHeight() * k), true);
+                Bitmap photo = rotate(bmp, rot);
+                JSObject res = new JSObject();
+                res.put("width", photo.getWidth());
+                res.put("height", photo.getHeight());
+                if (data != null) res.put("jpeg", smallJpeg(photo));
+                readBitmap(photo, call, res);
+            } catch (Exception e) {
+                call.reject("Reading the picture failed: " + e.getMessage());
+            }
+        });
+    }
+
+    private static Bitmap rotate(Bitmap raw, int rot) {
+        if (rot == 0) return raw;
+        Matrix m = new Matrix();
+        m.postRotate(rot);
+        return Bitmap.createBitmap(raw, 0, 0, raw.getWidth(), raw.getHeight(), m, true);
+    }
+
+    private static String smallJpeg(Bitmap photo) {
+        float k = Math.min(1f, 1600f / Math.max(photo.getWidth(), photo.getHeight()));
+        Bitmap small = k < 1f ? Bitmap.createScaledBitmap(photo, Math.round(photo.getWidth() * k), Math.round(photo.getHeight() * k), true) : photo;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        small.compress(Bitmap.CompressFormat.JPEG, 78, out);
+        return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+    }
+
+    // ML Kit barcodes + text on an upright bitmap; adds them to res and resolves the call.
+    private void readBitmap(Bitmap photo, PluginCall call, JSObject res) {
+        InputImage input = InputImage.fromBitmap(photo, 0);
+        Task<List<Barcode>> bt = barcodeScanner.process(input);
+        Task<Text> tt = textRecognizer.process(input);
+        Tasks.whenAllComplete(bt, tt).addOnCompleteListener(executor, done -> {
+            try {
+                JSArray barcodes = new JSArray();
+                if (bt.isSuccessful()) for (Barcode b : bt.getResult()) {
+                    if (b.getRawValue() == null || b.getCornerPoints() == null) continue;
+                    JSObject o = new JSObject();
+                    o.put("raw", b.getRawValue());
+                    o.put("corners", corners(b.getCornerPoints()));
+                    barcodes.put(o);
+                }
+                res.put("barcodes", barcodes);
+                JSArray lines = new JSArray();
+                if (tt.isSuccessful() && tt.getResult() != null) {
+                    int bi = 0;
+                    for (Text.TextBlock block : tt.getResult().getTextBlocks()) {
+                        for (Text.Line line : block.getLines()) {
+                            if (line.getCornerPoints() == null) continue;
+                            JSObject o = new JSObject();
+                            o.put("text", line.getText());
+                            o.put("block", bi);
+                            o.put("corners", corners(line.getCornerPoints()));
+                            lines.put(o);
+                        }
+                        bi++;
+                    }
+                }
+                res.put("lines", lines);
+                call.resolve(res);
+            } catch (Exception e) {
+                call.reject("Reading the photo failed: " + e.getMessage());
             }
         });
     }
