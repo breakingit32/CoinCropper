@@ -179,3 +179,11 @@ html.native-cam #video { display: none; }
 .single .s-note:empty { display: none; }
 .toast { position: absolute; left: 50%; top: 120px; transform: translateX(-50%); z-index: 5; background: #000c;
   color: #fff; padding: 8px 14px; border-radius: 99px; font-size: 14px; pointer-events: none; }
+
+/* Order check, one at a time */
+#guide.bad .g-slab { border-color: var(--red); border-style: solid; }
+.single .s-prices .wide { grid-column: 1 / -1; }
+.single .s-prices .bad b { color: var(--red); font-size: 16px; }
+.single .s-prices .bid b { white-space: normal; }
+.single .s-actions { display: flex; gap: 8px; margin-top: 10px; }
+.single .s-actions button { flex: 1; padding: 8px; font-size: 14px; }

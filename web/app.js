@@ -4,7 +4,7 @@ import { makeDeviceBackend } from "./device.js";
 import { readSlabs, slabFromBarcode, snapAngles } from "./slab.js";
 import { greyValue, parseKeysFile } from "./grading.js";
 import { SceneMap } from "./scene.js";
-import { checkOrder, orderFields } from "./order.js";
+import { checkOrder, checkSequence, orderFields } from "./order.js";
 
 const ZXING_URL = "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js";
 const TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
@@ -313,6 +313,11 @@ function linkBarcode(raw, cert) {
   if (aliases.get(raw) === cert) return;
   aliases.set(raw, cert);
   scene.rename(raw, cert);
+  if (typeof orderSeq !== "undefined" && orderSeq.includes(raw)) {   // order check: same slab, new key
+    orderSeq = orderSeq.includes(cert) ? orderSeq.filter((k) => k !== raw) : orderSeq.map((k) => (k === raw ? cert : k));
+    saveSeq();
+  }
+  if (singleKey === raw) singleKey = cert;
   if (rels.has(raw) && !rels.has(cert)) rels.set(cert, rels.get(raw));
   const oldT = tracks.get(raw), oldC = coins.get(raw);
   if (oldT) {
@@ -396,7 +401,7 @@ export function handleFrame(ev) {
   }
 
   snapAngles(dets.map((d) => d.slab));   // one case, one angle
-  if (mode === "single") { singleFrame(dets); return; }
+  if (mode === "single" || mode === "order") { singleFrame(dets); return; }
   const { visible, accepted } = scene.update(dets);
   for (const d of dets) {
     const key = scene.resolve(d.key);
@@ -575,7 +580,16 @@ let orderState = null, orderAt = 0;
 
 // Order of the slabs in the part of the case in view (the island seen last),
 // from their remembered case positions, straightened by the case's angle.
+// Order check, one slab at a time: the slabs in the order they were scanned
+// (top left first, left to right, row by row). Saved so it survives a restart.
+let orderSeq = (() => { try { return JSON.parse(localStorage.getItem("orderSeq") || "[]"); } catch { return []; } })();
+const saveSeq = () => { try { localStorage.setItem("orderSeq", JSON.stringify(orderSeq)); } catch { /* ignore */ } };
+
 function computeOrder() {
+  if (mode === "order") {
+    return checkSequence(orderSeq.filter((k) => coins.has(k)), (k) => orderFields(coins.get(k)),
+      { gradeDescending: setting("gradeOrder") !== "asc" });
+  }
   const all = [...scene.slabs.values()];
   if (!all.length) return null;
   const latest = all.reduce((a, b) => (b.lastSeen > a.lastSeen ? b : a));
@@ -603,8 +617,8 @@ function updateOrderSummary() {
   $("modeBtn").classList.toggle("on", mode === "order");
   if (mode !== "order") return;
   const s = orderState;
-  $("orderSummary").textContent = !s || !s.total ? "Order check · scan the case"
-    : s.wrong ? `${s.total} slabs · ${s.wrong} to move` : `${s.total - s.unknown} slabs · all in order ✓`;
+  $("orderSummary").textContent = !s || !s.total ? "Order check · scan the top-left slab"
+    : s.wrong ? `${s.total} scanned · ${s.wrong} to move` : `${s.total} scanned · all in order ✓`;
 }
 
 function renderOrderList() {
@@ -638,11 +652,15 @@ function applyMode() {
   $("modeBtn").textContent = MODE_ICONS[mode];
   $("modeBtn").title = MODE_NAMES[mode];
   $("modeBtn").classList.toggle("on", mode !== "price");
-  const single = mode === "single";
-  $("guide").hidden = !single || !nativeCam;
-  $("single").hidden = !single || !singleKey;
-  overlay.hidden = single;
-  if (!single) singleKey = null;
+  const guided = mode === "single" || mode === "order";   // one slab at a time, with the outline
+  $("guide").hidden = !guided || !nativeCam;
+  $("single").hidden = !guided || !singleKey;
+  $("sActions").hidden = mode !== "order";
+  $("guide").querySelector(".g-hint").textContent = mode === "order"
+    ? "Scan each slab in turn: top left first, then left to right" : "Line up a slab in the outline";
+  overlay.hidden = guided;
+  singleKey = null; singleCandidate = null;
+  orderAt = 0;
 }
 
 // ---------------------------------------------------------------- one-coin mode
@@ -678,16 +696,23 @@ function singleFrame(dets) {
   if (key === singleCandidate) singleCount++; else { singleCandidate = key; singleCount = 1; }
   if (singleCount < 2 && key !== singleKey) return;
   updateCoin(key, best);
-  if (singleKey !== key) { singleKey = key; renderSingle(); }
+  if (singleKey !== key) {
+    singleKey = key;
+    if (mode === "order" && !orderSeq.includes(key)) { orderSeq.push(key); saveSeq(); orderAt = 0; }
+    renderSingle();
+  }
 }
 
 function renderSingle() {
   const coin = singleKey && coins.get(singleKey);
-  $("single").hidden = !coin || mode !== "single";
+  $("single").hidden = !coin || (mode !== "single" && mode !== "order");
   const g = $("guide");
-  g.classList.toggle("found", !!coin && coin.status === "ok");
+  const st = mode === "order" && coin ? orderState?.items.get(singleKey) : null;
+  g.classList.toggle("found", !!coin && coin.status === "ok" && (mode !== "order" || st?.ok !== false));
+  g.classList.toggle("bad", st?.ok === false);
   g.classList.toggle("reading", !!coin && coin.status === "loading");
   if (!coin) return;
+  if (mode === "order") return renderOrderPanel(coin, st);
   const r = coin.result || {}, c = r.coin || {}, b = r.bids || {}, gr = r.grading || {}, gs = r.greysheet || {};
   $("sTitle").textContent = coin.status === "loading" && !r.coin ? "Reading…" : coinTitle(coin);
   $("sSub").textContent = [c.service, c.cert && `cert ${c.cert}`, c.pcgs_no && `PCGS #${c.pcgs_no}`,
@@ -703,6 +728,33 @@ function renderSingle() {
 }
 $("single").onclick = () => singleKey && openSheet(singleKey);
 
+function renderOrderPanel(coin, st) {
+  const c = coin.result?.coin || {}, gr = coin.result?.grading || {};
+  $("sTitle").textContent = st?.label || (coin.status === "loading" ? "Reading…" : coinTitle(coin));
+  $("sSub").textContent = [c.service, c.cert && `cert ${c.cert}`, gr.cac && `CAC ${gr.cac}`].filter(Boolean).join(" · ");
+  const pos = orderSeq.indexOf(singleKey) + 1;
+  const msg = !st ? (coin.status === "loading" ? "Reading…" : `#${pos}`)
+    : !st.known ? `#${pos} · can't read the label`
+    : st.ok ? `✓ #${pos} · in order`
+    : st.after ? `Move · after ${st.after}` : `Move · first, before ${st.before}`;
+  const cls = !st || !st.known ? "none" : st.ok ? "bid" : "bad";
+  $("sPrices").innerHTML = `<div class="${cls} wide"><span>Position</span><b>${esc(msg)}</b></div>`;
+  $("sNote").textContent = "";
+}
+$("undoBtn").onclick = (e) => {
+  e.stopPropagation();
+  orderSeq.pop(); saveSeq();
+  singleKey = orderSeq[orderSeq.length - 1] || null; singleCandidate = null; orderAt = 0;
+  toast(orderSeq.length ? `Back to #${orderSeq.length}` : "Nothing scanned");
+};
+$("restartBtn").onclick = (e) => {
+  e.stopPropagation();
+  orderSeq = []; saveSeq();
+  singleKey = null; singleCandidate = null; orderAt = 0; orderState = null;
+  updateOrderSummary(); renderSingle();
+  toast("Start over: scan the top-left slab");
+};
+
 function frame() {
   if (mode === "order" && performance.now() - orderAt > 250) {
     orderAt = performance.now();
@@ -710,7 +762,7 @@ function frame() {
     updateOrderSummary();
     if (!$("caseSheet").hidden) renderOrderList();
   }
-  if (mode === "single") renderSingle();
+  if (mode === "single" || mode === "order") renderSingle();
   renderTags(); declutter(); requestAnimationFrame(frame);
 }
 

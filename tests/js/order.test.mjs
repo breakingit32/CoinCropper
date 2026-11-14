@@ -1,5 +1,5 @@
 // node tests/js/order.test.mjs — case order check
-import { checkOrder, compareCoins, orderFields, readingOrder } from "../../web/order.js";
+import { checkOrder, checkSequence, compareCoins, orderFields, readingOrder } from "../../web/order.js";
 
 let failed = 0;
 const check = (ok, msg) => { console.log((ok ? "ok   " : "FAIL ") + msg); if (!ok) failed++; };
@@ -58,6 +58,14 @@ check(res.items.get("e").ok === false && res.items.get("e").after === "1909 S VD
 check(res.items.get("a").ok && res.items.get("d").ok && res.items.get("a").pos === 1, "slabs already in place are marked OK, with positions");
 const unk = checkOrder([...slabs, { key: "z", x: 550, y: 310, w: 140, h: 200 }], (k) => (k === "z" ? null : orderFields(C[k])), { gradeDescending: false });
 check(unk.unknown === 1 && unk.items.get("z").known === false && unk.wrong === 3, "unreadable slab is skipped, not counted wrong");
+
+// One at a time: scan order is the case order.
+{
+  const seq = { a: coin("1834 10C", "MS63"), b: coin("1921 10C", "AU55"), c: coin("1916-D 10C", "F15"), d: coin("1917 10C", "VF20") };
+  const r = checkSequence(["a", "b", "c", "d"], (k) => orderFields(seq[k]));
+  check(r.wrong === 1 && r.items.get("b").ok === false && r.items.get("b").after === "1917 10C · VF20", "scan order: 1921 flagged, goes after the 1917");
+  check(checkSequence([], () => null).total === 0, "nothing scanned yet: no error");
+}
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

@@ -82,6 +82,7 @@ export function readingOrder(slabs) {
 // Longest run already in order (non-decreasing); everything else must move.
 function keepSet(seq, cmp) {
   const n = seq.length, len = Array(n).fill(1), prev = Array(n).fill(-1);
+  if (!n) return new Set();
   for (let i = 0; i < n; i++)
     for (let j = 0; j < i; j++)
       if (cmp(seq[j].f, seq[i].f) <= 0 && len[j] + 1 > len[i]) { len[i] = len[j] + 1; prev[i] = j; }
@@ -116,4 +117,9 @@ export function checkOrder(slabs, fieldsOf, opts = {}) {
     items.set(s.key, { pos: s.pos, row: s.row, col: s.col, known: isKnown, ok, after, before, label: s.f?.label || null });
   }
   return { items, wrong: known.length - keep.size, unknown: seq.length - known.length, total: seq.length };
+}
+
+// Slabs scanned one at a time, in case order: position = scan order.
+export function checkSequence(keys, fieldsOf, opts = {}) {
+  return checkOrder(keys.map((key, i) => ({ key, x: i * 100, y: 0, w: 10, h: 10 })), fieldsOf, opts);
 }

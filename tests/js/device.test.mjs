@@ -432,7 +432,7 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p3.close();
 }
 
-// 12. Order check mode: a row of NGC dimes, one out of place.
+// 12. Order check, one slab at a time (scan order = case order).
 {
   const p4 = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 412, height: 915 } });
   p4.on("pageerror", (e) => { console.log("pageerror", e.message); failed++; });
@@ -449,27 +449,43 @@ check(urls[1] === "https://www.certifiedcoinexchange.com/m/lookup?bc=https%3A%2F
   await p4.click("#modeBtn");   // -> One coin
   await p4.click("#modeBtn");   // -> Order check
   await p4.click("#startBtn");
-  check(await p4.isVisible("#orderSummary") && await p4.evaluate(() => localStorage.getItem("mode")) === "order", "order mode switched on");
+  await p4.waitForFunction(() => !document.getElementById("guide").hidden);
+  check(await p4.isVisible("#orderSummary") && !(await p4.isHidden("#guide")) && await p4.evaluate(() => localStorage.getItem("mode")) === "order",
+    "order check uses the slab guide");
   const R = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-  // Four slabs left to right (image = preview 824x1830 px), labels: date+denom / grade / cert.
+  // Scan four NGC dimes one after another, each held in the guide; the 1921 is out of place.
   const slabs = [["1834 10C", "MS 63", "8569183-008"], ["1921 10C", "AU 55", "2047300-004"],
                  ["1916 D 10C", "F 15", "1275103-001"], ["1917 10C", "VF 20", "3905372-012"]];
-  // Spaced like a real NGC case: label text spans ~60% of the slab pitch.
-  const lines = slabs.flatMap(([d, g, c], i) => { const x = 30 + i * 200; return [
-    { text: d, block: i * 3, corners: R(x, 400, x + 80, 420) }, { text: g, block: i * 3 + 1, corners: R(x, 430, x + 50, 450) },
-    { text: c, block: i * 3 + 2, corners: R(x, 465, x + 100, 482) }]; });
-  for (let i = 0; i < 4; i++) {
-    await p4.evaluate(([lines]) => window.__l.forEach((cb) => cb({ width: 824, height: 1830, view: { x: 0, y: 0, w: 824, h: 1830 }, barcodes: [], lines })), [lines]);
-    await p4.waitForTimeout(80);
-  }
-  await p4.waitForFunction(() => /to move|in order/.test(document.getElementById("orderSummary").textContent), null, { timeout: 5000 });
+  const scan = async ([d, g, c]) => {
+    const lines = [{ text: d, corners: R(240, 500, 330, 528) }, { text: g, corners: R(240, 540, 300, 568) }, { text: c, corners: R(240, 580, 340, 600) }];
+    for (let i = 0; i < 3; i++)
+      await p4.evaluate(([lines]) => window.__l.forEach((cb) => cb({ width: 824, height: 1830, view: { x: 0, y: 0, w: 824, h: 1830 }, barcodes: [], lines })), [lines]);
+    await p4.waitForFunction((c) => window.__coincropper.coins.get(c)?.status === "ok", c);
+    await p4.waitForTimeout(350);   // order re-check runs every 250 ms
+  };
+  await scan(slabs[0]);
+  check(/✓ #1 · in order/.test(await p4.textContent("#sPrices")), "first slab: #1, in order");
+  await scan(slabs[1]);
+  await scan(slabs[1]);   // held again: not added twice
+  check(/✓ #2/.test(await p4.textContent("#sPrices")), "1921 on its own looks fine at #2");
+  await scan(slabs[2]);
+  const third = await p4.textContent("#sPrices");
+  await scan(slabs[3]);
   const summary = await p4.textContent("#orderSummary");
-  const cards = await p4.evaluate(() => Object.fromEntries([...window.__coincropper.tracks].map(([k, t]) => [k, t.el?.lastChild.textContent])));
-  check(summary === "4 slabs · 1 to move", `summary: ${summary}`);
-  check(/Move · after 1917 10C · VF20/.test(cards["2047300-004"] || ""), `1921 card: ${cards["2047300-004"]}`);
-  check(/✓ #1/.test(cards["8569183-008"] || "") && /✓ #3/.test(cards["1275103-001"] || ""), `in-place cards: ${cards["8569183-008"]} / ${cards["1275103-001"]}`);
-  const priced = await p4.evaluate(() => window.__calls.filter((u) => /greysheet|certifiedcoinexchange/.test(u)).length);
-  check(priced === 0, "order mode makes no price lookups");
+  check(summary === "4 scanned · 1 to move", `summary: ${summary}`);
+  const st = await p4.evaluate(() => { const s = window.__coincropper; return null; });
+  await p4.evaluate(() => document.getElementById("caseBtn").click());
+  const list = await p4.evaluate(() => [...document.querySelectorAll("#caseList li")].map((li) => li.textContent.replace(/\s+/g, " ").trim()));
+  check(list.length === 4 && /#2 1921 10C · AU55 after 1917 10C · VF20/.test(list[1]), `case list: ${list[1]}`);
+  check(/Move|✓ #3/.test(third), `third slab shows its position (${third})`);
+  await p4.evaluate(() => document.querySelector("[data-close=caseSheet]").click());
+  await p4.evaluate(() => document.getElementById("undoBtn").click());
+  await p4.waitForTimeout(350);
+  check((await p4.textContent("#orderSummary")).startsWith("3 scanned"), "undo removes the last scan");
+  await p4.evaluate(() => document.getElementById("restartBtn").click());
+  await p4.waitForTimeout(350);
+  check(/scan the top-left slab/.test(await p4.textContent("#orderSummary")) && await p4.evaluate(() => localStorage.getItem("orderSeq")) === "[]", "start over clears the sequence");
+  check(await p4.evaluate(() => window.__calls.filter((u) => /greysheet|certifiedcoinexchange/.test(u)).length) === 0, "order check makes no price lookups");
   await p4.close();
 }
 
